@@ -14,6 +14,7 @@
 10. Vector storage uses Chroma.
 11. Retrieval uses hybrid search followed by local `bge-reranker-v2-m3` reranking.
 12. Target example: input such as `有没有效果类似“我身作盾”的卡` should return cards with similar protective/negation/destruction-prevention effects, explain why they are similar, and include enough card metadata to verify the result.
+13. A local Web UI is in scope as a convenience layer over the same retrieval pipeline; it must not introduce a separate query implementation or store API keys in the browser.
 
 Correct these assumptions before implementation if any are wrong.
 
@@ -80,6 +81,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m rag_agent build-index
 .\.venv\Scripts\python.exe -m rag_agent query "有没有效果类似“我身作盾”的卡"
 .\.venv\Scripts\python.exe -m rag_agent query "有没有效果类似“我身作盾”的卡" --semantic --rerank --llm
+.\.venv\Scripts\python.exe -m rag_agent web --host 127.0.0.1 --port 7860
 ```
 
 Environment variables:
@@ -110,6 +112,8 @@ docs/
 rag_agent/
   __init__.py
   __main__.py                 # CLI entrypoint
+  web.py                      # Local ASGI Web UI
+  query_service.py            # Shared query orchestration for CLI and Web
   config.py                   # Paths and runtime configuration
   db.py                       # cards.cdb download/cache/schema/read logic
   cards.py                    # Card domain models and text normalization
@@ -165,6 +169,7 @@ Conventions:
 - Do not mix database access, retrieval, and answer formatting in the same function.
 - Keep generated data out of source control.
 - Return structured data from retrieval; format user-facing text only at the CLI/API boundary.
+- Keep the Web UI local-first by default and read provider credentials from environment variables only.
 
 ## Testing Strategy
 
@@ -183,6 +188,9 @@ Test levels:
 - CLI smoke tests:
   - `inspect-db` reports schema and row counts
   - `query` returns valid ranked output
+- Web smoke tests:
+  - `GET /` renders the query page
+  - `POST /api/query` returns structured JSON with answer, candidates, and warnings
 
 Coverage expectations:
 
@@ -319,7 +327,8 @@ The feature is complete when:
 7. Implement local reranker adapter.
 8. Implement LangChain + DeepSeek answer chain.
 9. Implement CLI commands end to end.
-10. Run tests and perform a real query against `我身作盾` if required runtime assets are available.
+10. Add a local Web UI that reuses the same query service as the CLI.
+11. Run tests and perform a real query against `我身作盾` if required runtime assets are available.
 
 ### Risks and Mitigations
 
@@ -383,3 +392,8 @@ The feature is complete when:
   - Acceptance: `download-db`, `inspect-db`, `build-index`, and `query` commands exist and provide actionable errors.
   - Verify: CLI smoke tests and manual `--help`.
   - Files: `rag_agent/__main__.py`, `tests/test_cli.py`
+
+- [x] Task: Add local Web UI
+  - Acceptance: `web` command starts a local browser UI; `POST /api/query` returns answer text, structured candidates, and warnings using the shared query pipeline.
+  - Verify: Web smoke tests and CLI help tests.
+  - Files: `rag_agent/web.py`, `rag_agent/query_service.py`, `rag_agent/__main__.py`, `tests/test_web.py`

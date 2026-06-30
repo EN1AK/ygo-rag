@@ -45,6 +45,7 @@ def test_cli_help_lists_commands():
     assert "inspect-db" in result.stdout
     assert "build-index" in result.stdout
     assert "query" in result.stdout
+    assert "web" in result.stdout
 
 
 def test_cli_query_help_lists_rag_mode_flags():

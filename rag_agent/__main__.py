@@ -8,12 +8,10 @@ from pathlib import Path
 
 from rag_agent.config import Settings
 from rag_agent.db import inspect_cards_db, load_cards
-from rag_agent.agent import CardRagAgent
 from rag_agent.cards import card_to_document
 from rag_agent.retrieval.embeddings import BgeM3Embeddings
-from rag_agent.retrieval.reranker import BgeReranker, SubprocessReranker
 from rag_agent.retrieval.vector import ChromaConfig, ChromaVectorStore
-from rag_agent.llm import create_deepseek_chat_model
+from rag_agent.query_service import QueryRequest, execute_query
 
 
 def download_db(url: str, destination: Path) -> int:
@@ -74,47 +72,36 @@ def query_cards(
     use_llm: bool = False,
     rerank_candidates: int = 20,
 ) -> int:
-    cards = load_cards(db_path)
-    embeddings = BgeM3Embeddings(settings.embedding_model, device=settings.embedding_device)
-
-    dense_retriever = None
-    if semantic:
-        candidate_dense_retriever = ChromaVectorStore(
-            ChromaConfig(settings.chroma_persist_dir), embeddings
-        )
-        indexed_count = candidate_dense_retriever.count()
-        if indexed_count < len(cards):
-            print(
-                f"warning: Chroma index has {indexed_count} documents but cards DB has {len(cards)}; "
-                "skipping dense retrieval until the full index is built.",
-                file=sys.stderr,
-            )
-        else:
-            dense_retriever = candidate_dense_retriever
-
-    reranker = None
-    if rerank:
-        if settings.embedding_device.startswith("cuda"):
-            reranker_device = (
-                settings.reranker_device
-                if settings.reranker_device_explicit
-                else "auto"
-            )
-            reranker = SubprocessReranker(
-                settings.reranker_model,
-                device=reranker_device,
-            )
-        else:
-            reranker = BgeReranker(settings.reranker_model, device=settings.reranker_device)
-    llm = create_deepseek_chat_model(settings) if use_llm else None
-
-    agent = CardRagAgent(
-        cards,
-        dense_retriever=dense_retriever,
-        reranker=reranker,
-        llm=llm,
+    response = execute_query(
+        QueryRequest(
+            query=query,
+            db_path=db_path,
+            top_k=top_k,
+            semantic=semantic,
+            rerank=rerank,
+            use_llm=use_llm,
+            rerank_candidates=rerank_candidates,
+        ),
+        settings,
     )
-    print(agent.query(query, top_k=top_k, rerank_candidates=rerank_candidates))
+    for warning in response.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    print(response.answer)
+    return 0
+
+
+def run_web(host: str, port: int) -> int:
+    try:
+        import uvicorn
+    except ImportError as exc:
+        raise RuntimeError(
+            "uvicorn is required for the web UI. Install dependencies with "
+            "`python -m pip install -r requirements.txt`."
+        ) from exc
+
+    from rag_agent.web import create_app
+
+    uvicorn.run(create_app(), host=host, port=port)
     return 0
 
 
@@ -156,6 +143,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="synthesize final answer with DeepSeek through LangChain",
     )
+
+    web = subparsers.add_parser("web", help="start local web UI")
+    web.add_argument("--host", default="127.0.0.1")
+    web.add_argument("--port", type=int, default=7860)
     return parser
 
 
@@ -187,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
                 use_llm=args.llm,
                 rerank_candidates=args.rerank_candidates,
             )
+        if args.command == "web":
+            return run_web(args.host, args.port)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -126,6 +126,29 @@ PowerShell 中如果查询文本包含中文弯引号，建议用单引号包裹
 .\.venv\Scripts\python.exe -m rag_agent query '有没有效果类似“我身作盾”的卡' --db data/cards.cdb --rerank
 ```
 
+## Web UI
+
+启动本地 Web 页面：
+
+```powershell
+$env:RAG_DEVICE="cuda"
+$env:HF_HUB_OFFLINE="1"
+.\.venv\Scripts\python.exe -m rag_agent web --host 127.0.0.1 --port 7860
+```
+
+然后打开：
+
+```text
+http://127.0.0.1:7860
+```
+
+说明：
+
+- 页面默认只监听本机地址 `127.0.0.1`。
+- `cards.cdb` 路径、Top K、semantic、rerank、LLM 开关可以在页面上调整。
+- DeepSeek API Key 不在页面填写，仍然通过环境变量 `DEEPSEEK_API_KEY` 读取。
+- 如果勾选 LLM，需要当前启动 Web 服务的终端里已经设置好 `DEEPSEEK_API_KEY`。
+
 ## Test
 
 当前全局 Anaconda 环境可能自动加载不兼容 pytest 插件，建议禁用插件自动加载：
