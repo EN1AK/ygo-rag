@@ -49,6 +49,7 @@ def test_web_api_returns_structured_query_response():
                 "llm": False,
                 "top_k": 10,
                 "rerank_candidates": 20,
+                "structured_max_block_chars": 80,
             },
         )
     )
@@ -58,6 +59,9 @@ def test_web_api_returns_structured_query_response():
     assert payload["answer"] == "候选：我身作盾"
     assert payload["results"][0]["name"] == "我身作盾"
     assert payload["warnings"] == ["测试 warning"]
+    assert payload["structured"]["summary"]["result_count"] == 1
+    assert payload["structured"]["blocks"][0]["type"] == "card"
+    assert len(payload["structured"]["blocks"][0]["text"]) <= 80
 
 
 async def call_asgi_app(app, method, path, payload=None):

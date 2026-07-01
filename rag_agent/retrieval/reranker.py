@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Any, Sequence
+from typing import Callable, Sequence
 
 from rag_agent.retrieval.hybrid import Candidate
 
@@ -113,6 +113,7 @@ def _strip_json_fence(text: str) -> str:
 class LlmReranker:
     llm: object
     max_candidates: int = 20
+    warning_callback: Callable[[str], None] | None = None
 
     def rerank(self, query: str, candidates: Sequence[Candidate]) -> list[Candidate]:
         if not candidates:
@@ -124,11 +125,18 @@ class LlmReranker:
             return list(candidates)
 
         prompt = build_llm_rerank_prompt(query, limited)
-        response = self.llm.invoke(prompt)
-        scores = parse_llm_rerank_response(
-            response,
-            allowed_ids={candidate.card_id for candidate in limited},
-        )
+        try:
+            response = self.llm.invoke(prompt)
+            scores = parse_llm_rerank_response(
+                response,
+                allowed_ids={candidate.card_id for candidate in limited},
+            )
+        except Exception as exc:
+            self._warn(
+                "LLM rerank failed; falling back to hybrid candidate order. "
+                f"{exc}"
+            )
+            return list(candidates)
         score_by_id = {score.card_id: score for score in scores}
         original_position = {
             candidate.card_id: index for index, candidate in enumerate(candidates)
@@ -160,6 +168,10 @@ class LlmReranker:
             source="llm_reranker",
             metadata=candidate.metadata | {"llm_judge_reason": reason},
         )
+
+    def _warn(self, message: str) -> None:
+        if self.warning_callback is not None:
+            self.warning_callback(message)
 
 
 @dataclass

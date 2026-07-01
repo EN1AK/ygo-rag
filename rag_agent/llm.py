@@ -18,5 +18,5 @@ def create_deepseek_chat_model(settings: Settings):
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
         temperature=0,
+        timeout=settings.deepseek_timeout_seconds,
     )
-

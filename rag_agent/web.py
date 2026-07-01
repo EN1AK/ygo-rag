@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from rag_agent.config import Settings
-from rag_agent.query_service import QueryRequest, QueryResponse, execute_query
+from rag_agent.query_service import (
+    QueryRequest,
+    QueryResponse,
+    build_structured_response,
+    execute_query,
+)
 
 QueryHandler = Callable[[QueryRequest], QueryResponse]
 
@@ -31,7 +36,19 @@ def create_app(query_handler: QueryHandler | None = None):
                 payload = await _read_json_body(receive)
                 request = parse_query_request(payload)
                 response = handler(request)
-                await _send_response(send, 200, query_response_to_dict(response))
+                await _send_response(
+                    send,
+                    200,
+                    query_response_to_dict(
+                        response,
+                        structured_max_block_chars=_optional_int_in_range(
+                            payload.get("structured_max_block_chars"),
+                            "structured_max_block_chars",
+                            minimum=1,
+                            maximum=4000,
+                        ),
+                    ),
+                )
                 return
             await _send_response(send, 404, {"error": "Not found."})
         except ValueError as exc:
@@ -76,11 +93,19 @@ def parse_query_request(payload: Mapping[str, Any]) -> QueryRequest:
     )
 
 
-def query_response_to_dict(response: QueryResponse) -> dict[str, Any]:
+def query_response_to_dict(
+    response: QueryResponse,
+    *,
+    structured_max_block_chars: int | None = None,
+) -> dict[str, Any]:
     return {
         "answer": response.answer,
         "results": response.results,
         "warnings": response.warnings,
+        "structured": build_structured_response(
+            response,
+            max_block_chars=structured_max_block_chars,
+        ),
     }
 
 
@@ -264,6 +289,18 @@ def _int_in_range(value: Any, name: str, *, minimum: int, maximum: int) -> int:
     if parsed < minimum or parsed > maximum:
         raise ValueError(f"{name} must be between {minimum} and {maximum}.")
     return parsed
+
+
+def _optional_int_in_range(
+    value: Any,
+    name: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    if value is None or value == "":
+        return None
+    return _int_in_range(value, name, minimum=minimum, maximum=maximum)
 
 
 def _as_bool(value: Any) -> bool:

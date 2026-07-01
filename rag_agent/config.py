@@ -19,6 +19,7 @@ class Settings:
     reranker_device_explicit: bool
     rerank_provider: str
     llm_rerank_max_candidates: int
+    deepseek_timeout_seconds: float
     deepseek_api_key: str | None
     deepseek_base_url: str
     deepseek_model: str
@@ -43,6 +44,9 @@ class Settings:
             rerank_provider=values.get("RAG_RERANK_PROVIDER", "none"),
             llm_rerank_max_candidates=int(
                 values.get("RAG_LLM_RERANK_MAX_CANDIDATES", "20")
+            ),
+            deepseek_timeout_seconds=float(
+                values.get("DEEPSEEK_TIMEOUT_SECONDS", "60")
             ),
             deepseek_api_key=values.get("DEEPSEEK_API_KEY"),
             deepseek_base_url=values.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),

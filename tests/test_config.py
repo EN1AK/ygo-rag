@@ -13,6 +13,7 @@ def test_settings_defaults_keep_runtime_artifacts_under_data():
     assert settings.reranker_device_explicit is False
     assert settings.rerank_provider == "none"
     assert settings.llm_rerank_max_candidates == 20
+    assert settings.deepseek_timeout_seconds == 60.0
     assert settings.deepseek_api_key is None
 
 
@@ -37,3 +38,9 @@ def test_settings_allows_separate_embedding_and_reranker_devices():
     assert settings.embedding_device == "cuda"
     assert settings.reranker_device == "auto"
     assert settings.reranker_device_explicit is True
+
+
+def test_settings_reads_deepseek_timeout_from_env():
+    settings = Settings.from_env({"DEEPSEEK_TIMEOUT_SECONDS": "15"})
+
+    assert settings.deepseek_timeout_seconds == 15.0

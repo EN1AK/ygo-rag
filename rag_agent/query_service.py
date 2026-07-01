@@ -113,6 +113,7 @@ def build_agent(
         reranker = LlmReranker(
             llm=llm_for_rerank,
             max_candidates=settings.llm_rerank_max_candidates,
+            warning_callback=warnings.append if warnings is not None else None,
         )
     elif provider == "local":
         if settings.embedding_device.startswith("cuda"):
@@ -205,3 +206,70 @@ def retrieved_card_to_dict(card: RetrievedCard) -> dict[str, Any]:
         "source_text": card.source_text,
         "reason": card.reason,
     }
+
+
+def build_structured_response(
+    response: QueryResponse,
+    *,
+    max_block_chars: int | None = None,
+) -> dict[str, Any]:
+    blocks = [
+        build_card_block(index, result, max_block_chars=max_block_chars)
+        for index, result in enumerate(response.results, start=1)
+    ]
+    return {
+        "version": 1,
+        "summary": {
+            "result_count": len(response.results),
+            "warning_count": len(response.warnings),
+            "warnings": response.warnings,
+        },
+        "blocks": blocks,
+    }
+
+
+def build_card_block(
+    index: int,
+    result: dict[str, Any],
+    *,
+    max_block_chars: int | None = None,
+) -> dict[str, Any]:
+    card_id = int(result["card_id"])
+    name = str(result.get("name", ""))
+    score = float(result.get("score", 0.0))
+    source_text = str(result.get("source_text", ""))
+    reason = str(result.get("reason", ""))
+    text = "\n".join(
+        [
+            f"{index}. {name}",
+            f"ID: {card_id}",
+            f"Score: {score:.4f}",
+            f"效果: {source_text}",
+            f"理由: {reason}",
+        ]
+    )
+    truncated_text = truncate_text(text, max_block_chars)
+    return {
+        "type": "card",
+        "index": index,
+        "card_id": card_id,
+        "name": name,
+        "score": score,
+        "text": truncated_text,
+        "truncated": truncated_text != text,
+        "fields": {
+            "card_id": card_id,
+            "name": name,
+            "score": score,
+            "source_text": source_text,
+            "reason": reason,
+        },
+    }
+
+
+def truncate_text(text: str, max_chars: int | None) -> str:
+    if max_chars is None or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars == 1:
+        return "…"
+    return text[: max_chars - 1].rstrip() + "…"

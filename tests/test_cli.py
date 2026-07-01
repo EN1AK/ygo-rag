@@ -24,9 +24,11 @@ def create_mini_cards_db(path):
         connection.close()
 
 
-def run_cli(*args):
+def run_cli(*args, env_overrides=None):
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    if env_overrides:
+        env.update(env_overrides)
     return subprocess.run(
         [sys.executable, "-m", "rag_agent", *args],
         check=False,
@@ -78,3 +80,21 @@ def test_cli_query_uses_sparse_baseline_when_db_is_provided(tmp_path):
     assert result.returncode == 0
     assert "我身作盾" in result.stdout
     assert "原文：" in result.stdout
+
+
+def test_cli_llm_rerank_reports_progress_before_missing_key_error(tmp_path):
+    db_path = tmp_path / "cards.cdb"
+    create_mini_cards_db(db_path)
+
+    result = run_cli(
+        "query",
+        "有没有效果类似“我身作盾”的卡",
+        "--db",
+        str(db_path),
+        "--llm-rerank",
+        env_overrides={"DEEPSEEK_API_KEY": ""},
+    )
+
+    assert result.returncode == 1
+    assert "Calling DeepSeek LLM judge rerank" in result.stderr
+    assert "DEEPSEEK_API_KEY is required" in result.stderr

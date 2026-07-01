@@ -73,6 +73,12 @@ def query_cards(
     use_llm: bool = False,
     rerank_candidates: int = 20,
 ) -> int:
+    if llm_rerank:
+        print(
+            "Calling DeepSeek LLM judge rerank; this may take a while...",
+            file=sys.stderr,
+            flush=True,
+        )
     response = execute_query(
         QueryRequest(
             query=query,

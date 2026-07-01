@@ -53,6 +53,7 @@ $env:HF_HUB_OFFLINE="1"
 $env:DEEPSEEK_API_KEY="..."
 $env:DEEPSEEK_BASE_URL="https://api.deepseek.com"
 $env:DEEPSEEK_MODEL="deepseek-chat"
+$env:DEEPSEEK_TIMEOUT_SECONDS="60"
 $env:RAG_EMBEDDING_MODEL="BAAI/bge-m3"
 $env:RAG_RERANKER_MODEL="BAAI/bge-reranker-v2-m3"
 $env:CHROMA_PERSIST_DIR="data/chroma"
@@ -134,6 +135,8 @@ $env:DEEPSEEK_API_KEY="..."
 - `--llm-rerank` 可以不搭配 `--llm` 使用；此时最终输出仍是检索结果格式，但排序来自 LLM judge。
 - 同时使用 `--llm-rerank --llm` 时，DeepSeek 会先用于候选排序，再用于最终回答生成，API 延迟和 token 成本都会增加。
 - LLM rerank 默认最多评估 20 个候选，可用 `$env:RAG_LLM_RERANK_MAX_CANDIDATES="10"` 调整。
+- DeepSeek 调用默认超时 60 秒，可用 `$env:DEEPSEEK_TIMEOUT_SECONDS="30"` 调整。
+- 如果 LLM judge 超时、网络失败或返回格式无法解析，查询会回退到 hybrid 候选顺序并输出 warning。
 
 PowerShell 中如果查询文本包含中文弯引号，建议用单引号包裹整个 query：
 
@@ -163,6 +166,87 @@ http://127.0.0.1:7860
 - `cards.cdb` 路径、Top K、semantic、本地 rerank、LLM judge rerank、LLM 回答开关可以在页面上调整。
 - DeepSeek API Key 不在页面填写，仍然通过环境变量 `DEEPSEEK_API_KEY` 读取。
 - 如果勾选 LLM judge rerank 或 LLM 回答，需要当前启动 Web 服务的终端里已经设置好 `DEEPSEEK_API_KEY`。
+
+## HTTP API / Bot Integration
+
+Web 服务启动后，其他服务可以调用：
+
+```text
+POST http://127.0.0.1:7860/api/query
+```
+
+请求示例：
+
+```json
+{
+  "query": "有没有效果类似暗黑武装龙且是暗属性的卡",
+  "db_path": "data/cards.cdb",
+  "top_k": 5,
+  "rerank_candidates": 5,
+  "semantic": true,
+  "rerank": false,
+  "llm_rerank": true,
+  "llm": false,
+  "structured_max_block_chars": 500
+}
+```
+
+响应会保留原有字段：
+
+```json
+{
+  "answer": "...",
+  "results": [],
+  "warnings": []
+}
+```
+
+同时额外返回适合 QQ bot 按卡片分段发送的 `structured`：
+
+```json
+{
+  "structured": {
+    "version": 1,
+    "summary": {
+      "result_count": 1,
+      "warning_count": 0,
+      "warnings": []
+    },
+    "blocks": [
+      {
+        "type": "card",
+        "index": 1,
+        "card_id": 65192027,
+        "name": "暗黑武装龙",
+        "score": 0.95,
+        "text": "1. 暗黑武装龙\nID: 65192027\nScore: 0.9500\n效果: ...\n理由: ...",
+        "truncated": false,
+        "fields": {
+          "card_id": 65192027,
+          "name": "暗黑武装龙",
+          "score": 0.95,
+          "source_text": "...",
+          "reason": "..."
+        }
+      }
+    ]
+  }
+}
+```
+
+Bot 可以直接逐条发送：
+
+```text
+structured.blocks[*].text
+```
+
+如果 QQ 单条消息长度有限，传入 `structured_max_block_chars`，超长卡片块会被截断并标记：
+
+```json
+{
+  "truncated": true
+}
+```
 
 ## Test
 
