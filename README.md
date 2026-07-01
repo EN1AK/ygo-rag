@@ -120,6 +120,21 @@ $env:HF_HUB_OFFLINE="1"
 .\.venv\Scripts\python.exe -m rag_agent query "有没有效果类似“我身作盾”的卡" --db data/cards.cdb --semantic --rerank --llm
 ```
 
+使用 DeepSeek 作为 LLM judge/rerank，避免加载本地 reranker：
+
+```powershell
+$env:DEEPSEEK_API_KEY="..."
+.\.venv\Scripts\python.exe -m rag_agent query "有没有效果类似“我身作盾”的卡" --db data/cards.cdb --semantic --llm-rerank
+```
+
+说明：
+
+- `--rerank` 使用本地 `bge-reranker-v2-m3`。
+- `--llm-rerank` 使用 DeepSeek 对候选卡做 judge/rerank，不等于最终回答生成。
+- `--llm-rerank` 可以不搭配 `--llm` 使用；此时最终输出仍是检索结果格式，但排序来自 LLM judge。
+- 同时使用 `--llm-rerank --llm` 时，DeepSeek 会先用于候选排序，再用于最终回答生成，API 延迟和 token 成本都会增加。
+- LLM rerank 默认最多评估 20 个候选，可用 `$env:RAG_LLM_RERANK_MAX_CANDIDATES="10"` 调整。
+
 PowerShell 中如果查询文本包含中文弯引号，建议用单引号包裹整个 query：
 
 ```powershell
@@ -145,9 +160,9 @@ http://127.0.0.1:7860
 说明：
 
 - 页面默认只监听本机地址 `127.0.0.1`。
-- `cards.cdb` 路径、Top K、semantic、rerank、LLM 开关可以在页面上调整。
+- `cards.cdb` 路径、Top K、semantic、本地 rerank、LLM judge rerank、LLM 回答开关可以在页面上调整。
 - DeepSeek API Key 不在页面填写，仍然通过环境变量 `DEEPSEEK_API_KEY` 读取。
-- 如果勾选 LLM，需要当前启动 Web 服务的终端里已经设置好 `DEEPSEEK_API_KEY`。
+- 如果勾选 LLM judge rerank 或 LLM 回答，需要当前启动 Web 服务的终端里已经设置好 `DEEPSEEK_API_KEY`。
 
 ## Test
 

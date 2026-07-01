@@ -81,11 +81,21 @@ def _candidate_to_retrieved_card(candidate: Candidate) -> RetrievedCard:
         name=str(metadata.get("name", "")),
         score=candidate.score,
         source_text=str(metadata.get("desc") or metadata.get("text") or ""),
-        reason=_reason_for_source(candidate.source),
+        reason=_reason_for_candidate(candidate),
     )
 
 
+def _reason_for_candidate(candidate: Candidate) -> str:
+    if candidate.source == "llm_reranker":
+        reason = str(candidate.metadata.get("llm_judge_reason") or "").strip()
+        if reason:
+            return f"LLM judge reranked this candidate: {reason}"
+    return _reason_for_source(candidate.source)
+
+
 def _reason_for_source(source: str) -> str:
+    if source == "llm_reranker":
+        return "Candidates reranked by LLM judge."
     if source == "reranker":
         return "Hybrid candidates reranked by local bge-reranker-v2-m3."
     if source == "hybrid":

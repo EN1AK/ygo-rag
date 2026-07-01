@@ -11,6 +11,8 @@ def test_settings_defaults_keep_runtime_artifacts_under_data():
     assert settings.embedding_device == "auto"
     assert settings.reranker_device == "auto"
     assert settings.reranker_device_explicit is False
+    assert settings.rerank_provider == "none"
+    assert settings.llm_rerank_max_candidates == 20
     assert settings.deepseek_api_key is None
 
 

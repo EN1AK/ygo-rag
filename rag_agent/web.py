@@ -65,6 +65,7 @@ def parse_query_request(payload: Mapping[str, Any]) -> QueryRequest:
         top_k=_int_in_range(payload.get("top_k", 10), "top_k", minimum=1, maximum=50),
         semantic=_as_bool(payload.get("semantic", False)),
         rerank=_as_bool(payload.get("rerank", False)),
+        rerank_provider=_parse_rerank_provider(payload),
         use_llm=_as_bool(payload.get("llm", payload.get("use_llm", False))),
         rerank_candidates=_int_in_range(
             payload.get("rerank_candidates", 20),
@@ -138,6 +139,7 @@ def render_index_html() -> str:
     <div class="checks">
       <label><input id="semantic" name="semantic" type="checkbox" checked> Chroma semantic</label>
       <label><input id="rerank" name="rerank" type="checkbox" checked> bge rerank</label>
+      <label><input id="llm_rerank" name="llm_rerank" type="checkbox"> LLM judge rerank</label>
       <label><input id="llm" name="llm" type="checkbox"> DeepSeek LLM</label>
     </div>
     <button id="submit" type="submit">查询</button>
@@ -158,6 +160,7 @@ form.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(form).entries());
   payload.semantic = document.querySelector("#semantic").checked;
   payload.rerank = document.querySelector("#rerank").checked;
+  payload.llm_rerank = document.querySelector("#llm_rerank").checked;
   payload.llm = document.querySelector("#llm").checked;
   payload.top_k = Number(payload.top_k || 10);
   payload.rerank_candidates = Number(payload.rerank_candidates || 20);
@@ -269,3 +272,12 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _parse_rerank_provider(payload: Mapping[str, Any]) -> str | None:
+    provider = payload.get("rerank_provider")
+    if provider is not None:
+        return str(provider)
+    if _as_bool(payload.get("llm_rerank", False)):
+        return "llm"
+    return None

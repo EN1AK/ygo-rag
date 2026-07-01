@@ -54,6 +54,7 @@ def test_cli_query_help_lists_rag_mode_flags():
     assert result.returncode == 0
     assert "--semantic" in result.stdout
     assert "--rerank" in result.stdout
+    assert "--llm-rerank" in result.stdout
     assert "--llm" in result.stdout
 
 

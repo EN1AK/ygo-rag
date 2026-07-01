@@ -15,7 +15,7 @@ from rag_agent.config import Settings
 from rag_agent.db import load_cards
 from rag_agent.llm import create_deepseek_chat_model
 from rag_agent.retrieval.embeddings import BgeM3Embeddings
-from rag_agent.retrieval.reranker import BgeReranker, SubprocessReranker
+from rag_agent.retrieval.reranker import BgeReranker, LlmReranker, SubprocessReranker
 from rag_agent.retrieval.vector import ChromaConfig, ChromaVectorStore
 
 
@@ -26,6 +26,7 @@ class QueryRequest:
     top_k: int = 10
     semantic: bool = False
     rerank: bool = False
+    rerank_provider: str | None = None
     use_llm: bool = False
     rerank_candidates: int = 20
 
@@ -47,6 +48,7 @@ def execute_query(request: QueryRequest, settings: Settings) -> QueryResponse:
         semantic=request.semantic,
         rerank=request.rerank,
         use_llm=request.use_llm,
+        rerank_provider=request.rerank_provider,
         warnings=warnings,
     )
     retrieved = agent.retrieve(
@@ -74,6 +76,7 @@ def build_agent(
     semantic: bool,
     rerank: bool,
     use_llm: bool,
+    rerank_provider: str | None = None,
     warnings: list[str] | None = None,
 ) -> CardRagAgent:
     dense_retriever = None
@@ -97,8 +100,21 @@ def build_agent(
         else:
             dense_retriever = candidate_dense_retriever
 
+    provider = resolve_rerank_provider_from_values(
+        rerank=rerank,
+        rerank_provider=rerank_provider,
+        settings=settings,
+    )
+
+    llm = None
     reranker = None
-    if rerank:
+    if provider == "llm":
+        llm_for_rerank = create_deepseek_chat_model(settings)
+        reranker = LlmReranker(
+            llm=llm_for_rerank,
+            max_candidates=settings.llm_rerank_max_candidates,
+        )
+    elif provider == "local":
         if settings.embedding_device.startswith("cuda"):
             reranker_device = (
                 settings.reranker_device
@@ -115,13 +131,53 @@ def build_agent(
                 device=settings.reranker_device,
             )
 
-    llm = create_deepseek_chat_model(settings) if use_llm else None
+    if use_llm:
+        llm = create_deepseek_chat_model(settings)
     return CardRagAgent(
         cards,
         dense_retriever=dense_retriever,
         reranker=reranker,
         llm=llm,
     )
+
+
+def resolve_rerank_provider(request: QueryRequest, settings: Settings) -> str:
+    return resolve_rerank_provider_from_values(
+        rerank=request.rerank,
+        rerank_provider=request.rerank_provider,
+        settings=settings,
+    )
+
+
+def resolve_rerank_provider_from_values(
+    *,
+    rerank: bool,
+    rerank_provider: str | None,
+    settings: Settings,
+) -> str:
+    if rerank_provider:
+        provider = rerank_provider
+    elif rerank:
+        provider = "local"
+    else:
+        provider = settings.rerank_provider
+
+    normalized = provider.strip().lower()
+    aliases = {
+        "": "none",
+        "false": "none",
+        "off": "none",
+        "no": "none",
+        "bge": "local",
+        "local-bge": "local",
+        "llm-rerank": "llm",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"none", "local", "llm"}:
+        raise ValueError(
+            "rerank provider must be one of: none, local, llm."
+        )
+    return normalized
 
 
 def answer_from_retrieved_cards(

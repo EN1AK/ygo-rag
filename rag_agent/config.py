@@ -17,6 +17,8 @@ class Settings:
     embedding_device: str
     reranker_device: str
     reranker_device_explicit: bool
+    rerank_provider: str
+    llm_rerank_max_candidates: int
     deepseek_api_key: str | None
     deepseek_base_url: str
     deepseek_model: str
@@ -38,6 +40,10 @@ class Settings:
             embedding_device=values.get("RAG_EMBEDDING_DEVICE", device),
             reranker_device=values.get("RAG_RERANKER_DEVICE", device),
             reranker_device_explicit="RAG_RERANKER_DEVICE" in values,
+            rerank_provider=values.get("RAG_RERANK_PROVIDER", "none"),
+            llm_rerank_max_candidates=int(
+                values.get("RAG_LLM_RERANK_MAX_CANDIDATES", "20")
+            ),
             deepseek_api_key=values.get("DEEPSEEK_API_KEY"),
             deepseek_base_url=values.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
             deepseek_model=values.get("DEEPSEEK_MODEL", "deepseek-chat"),

@@ -69,6 +69,7 @@ def query_cards(
     *,
     semantic: bool = False,
     rerank: bool = False,
+    llm_rerank: bool = False,
     use_llm: bool = False,
     rerank_candidates: int = 20,
 ) -> int:
@@ -79,6 +80,7 @@ def query_cards(
             top_k=top_k,
             semantic=semantic,
             rerank=rerank,
+            rerank_provider="llm" if llm_rerank else None,
             use_llm=use_llm,
             rerank_candidates=rerank_candidates,
         ),
@@ -139,6 +141,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="rerank hybrid candidates using local bge-reranker-v2-m3",
     )
     query.add_argument(
+        "--llm-rerank",
+        action="store_true",
+        help="rerank hybrid candidates using DeepSeek as an LLM judge",
+    )
+    query.add_argument(
         "--llm",
         action="store_true",
         help="synthesize final answer with DeepSeek through LangChain",
@@ -175,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
                 settings,
                 semantic=args.semantic,
                 rerank=args.rerank,
+                llm_rerank=args.llm_rerank,
                 use_llm=args.llm,
                 rerank_candidates=args.rerank_candidates,
             )

@@ -5,7 +5,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Sequence
+from typing import Any, Sequence
 
 from rag_agent.retrieval.hybrid import Candidate
 
@@ -13,6 +13,153 @@ from rag_agent.retrieval.hybrid import Candidate
 def _normalize_rerank_text(value: object) -> str:
     text = str(value or "")
     return " ".join(text.replace("\x00", " ").split())
+
+
+@dataclass(frozen=True)
+class LlmJudgeScore:
+    card_id: int
+    score: float
+    reason: str
+
+
+def build_llm_rerank_prompt(query: str, candidates: Sequence[Candidate]) -> str:
+    candidate_payload = []
+    for candidate in candidates:
+        metadata = candidate.metadata
+        candidate_payload.append(
+            {
+                "card_id": candidate.card_id,
+                "name": str(metadata.get("name", "")),
+                "retrieval_score": f"{candidate.score:.4f}",
+                "source_text": _normalize_rerank_text(
+                    metadata.get("desc") or metadata.get("text") or ""
+                ),
+            }
+        )
+    return (
+        "你是游戏王卡片效果相似度 judge。"
+        "只允许评价候选列表中的卡，不要引入候选外卡片。\n"
+        "请优先判断主要效果意图是否相似，例如保护对象、发动条件、作用对象、效果结果；"
+        "不要只因为费用、数字或“无效并破坏”等表面关键词相同就给高分。\n"
+        "请只输出 JSON，不要输出 Markdown。格式："
+        '{"results":[{"card_id":123,"score":0.0到1.0之间的数字,"reason":"简短中文理由"}]}'
+        "\n\n"
+        f"用户问题：{query}\n\n"
+        "候选卡 JSON：\n"
+        f"{json.dumps(candidate_payload, ensure_ascii=False, indent=2)}"
+    )
+
+
+def parse_llm_rerank_response(
+    content: object,
+    *,
+    allowed_ids: set[int],
+) -> list[LlmJudgeScore]:
+    text = _extract_response_text(content)
+    try:
+        payload = json.loads(_strip_json_fence(text))
+    except Exception as exc:
+        raise RuntimeError("Unable to parse LLM rerank response as JSON.") from exc
+
+    if isinstance(payload, list):
+        raw_results = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        raw_results = payload["results"]
+    else:
+        raise RuntimeError("Unable to parse LLM rerank response: expected results list.")
+
+    parsed: list[LlmJudgeScore] = []
+    seen: set[int] = set()
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        try:
+            card_id = int(item["card_id"])
+            score = float(item["score"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if card_id not in allowed_ids or card_id in seen:
+            continue
+        reason = _normalize_rerank_text(item.get("reason", ""))
+        parsed.append(
+            LlmJudgeScore(
+                card_id=card_id,
+                score=score,
+                reason=reason or "LLM judge did not provide a reason.",
+            )
+        )
+        seen.add(card_id)
+    return parsed
+
+
+def _extract_response_text(content: object) -> str:
+    value = getattr(content, "content", content)
+    return str(value)
+
+
+def _strip_json_fence(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    return stripped
+
+
+@dataclass
+class LlmReranker:
+    llm: object
+    max_candidates: int = 20
+
+    def rerank(self, query: str, candidates: Sequence[Candidate]) -> list[Candidate]:
+        if not candidates:
+            return []
+
+        limited = list(candidates[: max(self.max_candidates, 0)])
+        overflow = list(candidates[len(limited) :])
+        if not limited:
+            return list(candidates)
+
+        prompt = build_llm_rerank_prompt(query, limited)
+        response = self.llm.invoke(prompt)
+        scores = parse_llm_rerank_response(
+            response,
+            allowed_ids={candidate.card_id for candidate in limited},
+        )
+        score_by_id = {score.card_id: score for score in scores}
+        original_position = {
+            candidate.card_id: index for index, candidate in enumerate(candidates)
+        }
+
+        scored: list[Candidate] = []
+        unscored: list[Candidate] = []
+        for candidate in limited:
+            judge_score = score_by_id.get(candidate.card_id)
+            if judge_score is None:
+                unscored.append(self._with_reason(candidate, candidate.score, "LLM judge did not score this candidate."))
+                continue
+            scored.append(
+                self._with_reason(candidate, judge_score.score, judge_score.reason)
+            )
+
+        scored.sort(key=lambda candidate: (-candidate.score, candidate.card_id))
+        unscored.extend(
+            self._with_reason(candidate, candidate.score, "Candidate was not sent to LLM judge due to max candidate limit.")
+            for candidate in overflow
+        )
+        unscored.sort(key=lambda candidate: original_position[candidate.card_id])
+        return scored + unscored
+
+    def _with_reason(self, candidate: Candidate, score: float, reason: str) -> Candidate:
+        return Candidate(
+            card_id=candidate.card_id,
+            score=float(score),
+            source="llm_reranker",
+            metadata=candidate.metadata | {"llm_judge_reason": reason},
+        )
 
 
 @dataclass
