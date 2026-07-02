@@ -102,6 +102,8 @@ def query_response_to_dict(
         "answer": response.answer,
         "results": response.results,
         "warnings": response.warnings,
+        "structured_query": response.structured_query,
+        "filter_diagnostics": response.filter_diagnostics,
         "structured": build_structured_response(
             response,
             max_block_chars=structured_max_block_chars,
@@ -216,6 +218,27 @@ function renderResult(data) {
     </div>
   `).join("");
   output.innerHTML = `${warnings}<h2>回答</h2><div class="answer">${escapeHtml(data.answer || "")}</div><h2>候选卡</h2>${cards || "<p class='muted'>无候选结果</p>"}`;
+}
+
+const baseRenderResult = renderResult;
+renderResult = function(data) {
+  baseRenderResult(data);
+  const filterInfo = renderFilterInfo(data);
+  if (filterInfo) output.insertAdjacentHTML("afterbegin", filterInfo);
+};
+
+function renderFilterInfo(data) {
+  const structuredQuery = data.structured_query || {};
+  const diagnostics = data.filter_diagnostics || {};
+  if (!structuredQuery.has_filters && !diagnostics.applied) return "";
+  return `
+    <div class="panel">
+      <h2>结构化过滤</h2>
+      <p class="muted">Effect query: <code>${escapeHtml(structuredQuery.effect_query || "")}</code></p>
+      <p class="muted">Filters: <code>${escapeHtml(JSON.stringify(structuredQuery.filters || {}))}</code></p>
+      <p class="muted">Candidates: ${Number(diagnostics.filtered_candidates || 0)} / ${Number(diagnostics.total_candidates || 0)}</p>
+    </div>
+  `;
 }
 
 function escapeHtml(value) {

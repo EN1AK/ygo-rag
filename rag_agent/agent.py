@@ -6,6 +6,12 @@ from typing import Protocol, Sequence
 from rag_agent.cards import Card
 from rag_agent.retrieval.hybrid import Candidate, reciprocal_rank_fusion
 from rag_agent.retrieval.sparse import SparseCardRetriever
+from rag_agent.structured_query import (
+    FilterDiagnostics,
+    StructuredQuery,
+    card_matches_filters,
+    parse_structured_query,
+)
 
 
 @dataclass(frozen=True)
@@ -115,12 +121,16 @@ class CardRagAgent:
         dense_retriever: Retriever | None = None,
         reranker: Reranker | None = None,
         llm: Llm | None = None,
+        warning_callback=None,
     ) -> None:
         self.cards = list(cards)
         self.sparse_retriever = SparseCardRetriever.from_cards(cards)
         self.dense_retriever = dense_retriever
         self.reranker = reranker
         self.llm = llm
+        self.warning_callback = warning_callback
+        self.last_structured_query = parse_structured_query("")
+        self.last_filter_diagnostics = FilterDiagnostics(total_candidates=len(self.cards))
 
     def retrieve(
         self,
@@ -129,12 +139,47 @@ class CardRagAgent:
         top_k: int = 10,
         rerank_candidates: int = 20,
     ) -> list[RetrievedCard]:
-        retrieval_query = self._expand_query_with_referenced_card(query)
-        sparse_candidates = self.sparse_retriever.search(retrieval_query, top_k=top_k)
+        structured_query = parse_structured_query(query)
+        self.last_structured_query = structured_query
+        candidate_cards = self._filter_cards(structured_query)
+        diagnostics_warnings: list[str] = []
+
+        if structured_query.has_filters and not candidate_cards:
+            warning = "Structured query filters matched no cards; returning no retrieval results."
+            diagnostics_warnings.append(warning)
+            self._warn(warning)
+
+        self.last_filter_diagnostics = FilterDiagnostics(
+            applied=structured_query.has_filters,
+            total_candidates=len(self.cards),
+            filtered_candidates=len(candidate_cards),
+            warnings=tuple(diagnostics_warnings),
+        )
+        if structured_query.has_filters and not candidate_cards:
+            return []
+
+        retrieval_query = self._expand_query_with_referenced_card(
+            structured_query.effect_query or query
+        )
+        sparse_retriever = (
+            SparseCardRetriever.from_cards(candidate_cards)
+            if structured_query.has_filters
+            else self.sparse_retriever
+        )
+        sparse_candidates = sparse_retriever.search(retrieval_query, top_k=top_k)
         ranked_lists: list[list[Candidate]] = [sparse_candidates]
 
         if self.dense_retriever is not None:
-            ranked_lists.append(self.dense_retriever.search(retrieval_query, top_k=top_k))
+            dense_top_k = max(top_k, top_k * 20) if structured_query.has_filters else top_k
+            dense_candidates = self.dense_retriever.search(retrieval_query, top_k=dense_top_k)
+            if structured_query.has_filters:
+                allowed_ids = {card.card_id for card in candidate_cards}
+                dense_candidates = [
+                    candidate
+                    for candidate in dense_candidates
+                    if candidate.card_id in allowed_ids
+                ][:top_k]
+            ranked_lists.append(dense_candidates)
 
         candidate_limit = max(
             top_k,
@@ -177,3 +222,16 @@ class CardRagAgent:
         referenced.sort(key=lambda card: len(card.name), reverse=True)
         card = referenced[0]
         return f"{query}\n参考卡：{card.name}\n参考卡效果：{card.description}"
+
+    def _filter_cards(self, structured_query: StructuredQuery) -> list[Card]:
+        if not structured_query.has_filters:
+            return self.cards
+        return [
+            card
+            for card in self.cards
+            if card_matches_filters(card, structured_query.filters)
+        ]
+
+    def _warn(self, warning: str) -> None:
+        if self.warning_callback is not None:
+            self.warning_callback(warning)

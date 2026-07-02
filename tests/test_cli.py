@@ -3,6 +3,8 @@ import os
 import subprocess
 import sys
 
+from rag_agent.card_metadata import TYPE_EFFECT, TYPE_MONSTER, TYPE_XYZ
+
 
 def create_mini_cards_db(path):
     connection = sqlite3.connect(path)
@@ -98,3 +100,32 @@ def test_cli_llm_rerank_reports_progress_before_missing_key_error(tmp_path):
     assert result.returncode == 1
     assert "Calling DeepSeek LLM judge rerank" in result.stderr
     assert "DEEPSEEK_API_KEY is required" in result.stderr
+
+
+def test_cli_query_prints_structured_filter_diagnostics(tmp_path):
+    db_path = tmp_path / "cards.cdb"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "create table datas(id integer primary key, ot integer, alias integer, setcode integer, type integer, atk integer, def integer, level integer, race integer, attribute integer, category integer)"
+        )
+        connection.execute(
+            "create table texts(id integer primary key, name text, desc text, str1 text, str2 text, str3 text, str4 text, str5 text, str6 text, str7 text, str8 text, str9 text, str10 text, str11 text, str12 text, str13 text, str14 text, str15 text, str16 text)"
+        )
+        connection.execute(
+            "insert into datas values(1, 0, 0, 0, ?, 1000, 1000, 4, 8192, 32, 0)",
+            (TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,),
+        )
+        connection.execute(
+            "insert into texts values(1, '四阶超量', '除外对手墓地的卡。', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '')"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = run_cli("query", "效果是除外对手墓地的卡的四星超量怪兽", "--db", str(db_path))
+
+    assert result.returncode == 0
+    assert "Structured filters:" in result.stdout
+    assert '"rank": 4' in result.stdout
+    assert "四阶超量" in result.stdout

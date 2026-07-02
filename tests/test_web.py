@@ -2,7 +2,7 @@ import asyncio
 import json
 
 from rag_agent.query_service import QueryResponse
-from rag_agent.web import create_app, render_index_html
+from rag_agent.web import create_app, query_response_to_dict, render_index_html
 
 
 def test_render_index_html_contains_query_form():
@@ -62,6 +62,32 @@ def test_web_api_returns_structured_query_response():
     assert payload["structured"]["summary"]["result_count"] == 1
     assert payload["structured"]["blocks"][0]["type"] == "card"
     assert len(payload["structured"]["blocks"][0]["text"]) <= 80
+
+
+def test_query_response_to_dict_includes_structured_filter_diagnostics():
+    response = QueryResponse(
+        answer="ok",
+        results=[],
+        warnings=[],
+        structured_query={
+            "has_filters": True,
+            "effect_query": "除外对手墓地",
+            "filters": {"card_kind": "monster", "monster_types": ["xyz"], "rank": 4},
+        },
+        filter_diagnostics={
+            "applied": True,
+            "total_candidates": 2,
+            "filtered_candidates": 1,
+            "warnings": [],
+        },
+    )
+
+    payload = query_response_to_dict(response)
+
+    assert payload["structured_query"]["filters"]["rank"] == 4
+    assert payload["filter_diagnostics"]["filtered_candidates"] == 1
+    assert payload["structured"]["structured_query"]["filters"]["rank"] == 4
+    assert payload["structured"]["filter_diagnostics"]["filtered_candidates"] == 1
 
 
 async def call_asgi_app(app, method, path, payload=None):

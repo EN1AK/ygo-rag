@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 import urllib.request
@@ -94,6 +95,11 @@ def query_cards(
     )
     for warning in response.warnings:
         print(f"warning: {warning}", file=sys.stderr)
+    if response.structured_query and response.structured_query.get("has_filters"):
+        print("Structured filters:")
+        print(json.dumps(response.structured_query, ensure_ascii=False, indent=2))
+        if response.filter_diagnostics:
+            print(json.dumps(response.filter_diagnostics, ensure_ascii=False, indent=2))
     print(response.answer)
     return 0
 

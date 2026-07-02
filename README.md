@@ -248,6 +248,23 @@ structured.blocks[*].text
 }
 ```
 
+## Structured Filters
+
+查询中包含明确的卡片结构条件时，系统会先按 `cards.cdb` 元数据过滤候选卡，再做 sparse / Chroma / rerank 排序。例如：
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent query "效果是除外或者回收对手墓地的卡的四星超量怪兽" --db data/cards.cdb --semantic --llm-rerank
+```
+
+当前支持的高置信条件包括：
+
+- 属性：`暗属性`、`光属性`、`地属性`、`水属性`、`炎属性`、`风属性`、`神属性`
+- 大类：`怪兽`、`魔法`、`陷阱`
+- 怪兽类型：`超量/XYZ`、`融合`、`同调/同步`、`连接/LINK`、`仪式`、`效果怪兽`、`通常怪兽`
+- 数值：`四星`、`4星`、`四阶`、`4阶`、`Rank 4`、`LINK-2`
+
+例如 `四星超量怪兽` 会按实际需求宽松解释为 `rank=4` 的超量怪兽。CLI 会在命中结构化条件时额外输出 `Structured filters` 诊断，API 也会返回 `structured_query` 和 `filter_diagnostics`。
+
 ## Test
 
 当前全局 Anaconda 环境可能自动加载不兼容 pytest 插件，建议禁用插件自动加载：

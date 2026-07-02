@@ -36,6 +36,8 @@ class QueryResponse:
     answer: str
     results: list[dict[str, Any]]
     warnings: list[str]
+    structured_query: dict[str, Any] | None = None
+    filter_diagnostics: dict[str, Any] | None = None
 
 
 def execute_query(request: QueryRequest, settings: Settings) -> QueryResponse:
@@ -66,6 +68,8 @@ def execute_query(request: QueryRequest, settings: Settings) -> QueryResponse:
         answer=answer,
         results=[retrieved_card_to_dict(card) for card in retrieved],
         warnings=warnings,
+        structured_query=agent.last_structured_query.to_dict(),
+        filter_diagnostics=agent.last_filter_diagnostics.to_dict(),
     )
 
 
@@ -139,6 +143,7 @@ def build_agent(
         dense_retriever=dense_retriever,
         reranker=reranker,
         llm=llm,
+        warning_callback=warnings.append if warnings is not None else None,
     )
 
 
@@ -224,6 +229,8 @@ def build_structured_response(
             "warning_count": len(response.warnings),
             "warnings": response.warnings,
         },
+        "structured_query": response.structured_query,
+        "filter_diagnostics": response.filter_diagnostics,
         "blocks": blocks,
     }
 

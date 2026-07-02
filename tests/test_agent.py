@@ -1,5 +1,6 @@
 from rag_agent.agent import CardRagAgent, RetrievedCard, format_retrieval_answer
 from rag_agent.cards import Card
+from rag_agent.card_metadata import TYPE_EFFECT, TYPE_MONSTER, TYPE_XYZ
 from rag_agent.retrieval.hybrid import Candidate
 
 
@@ -38,7 +39,11 @@ class FakeDenseRetriever:
 
 
 class FakeReranker:
+    def __init__(self):
+        self.received_candidates = []
+
     def rerank(self, query, candidates):
+        self.received_candidates = list(candidates)
         return [
             Candidate(
                 card_id=candidate.card_id,
@@ -104,3 +109,94 @@ def test_card_rag_agent_expands_query_with_referenced_card_effect():
     retrieved = agent.retrieve("有没有效果类似“我身作盾”的卡", top_k=3)
 
     assert [card.card_id for card in retrieved[:2]] == [1, 2]
+
+
+class MixedDenseRetriever:
+    def search(self, query, *, top_k=10):
+        return [
+            Candidate(2, 0.99, "dense", {"name": "非超量", "desc": "除外墓地"}),
+            Candidate(1, 0.9, "dense", {"name": "四阶超量", "desc": "除外墓地"}),
+        ]
+
+
+def test_structured_filters_prefilter_sparse_and_dense_candidates():
+    cards = [
+        Card(
+            1,
+            "四阶超量",
+            "除外对手墓地的卡",
+            type=TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        ),
+        Card(
+            2,
+            "非超量",
+            "除外对手墓地的卡",
+            type=TYPE_MONSTER | TYPE_EFFECT,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        ),
+    ]
+    agent = CardRagAgent(cards, dense_retriever=MixedDenseRetriever())
+
+    retrieved = agent.retrieve("效果是除外对手墓地的卡的四星超量怪兽", top_k=5)
+
+    assert [card.card_id for card in retrieved] == [1]
+    assert agent.last_structured_query.filters.rank == 4
+    assert agent.last_filter_diagnostics.applied
+    assert agent.last_filter_diagnostics.total_candidates == 2
+    assert agent.last_filter_diagnostics.filtered_candidates == 1
+
+
+def test_structured_filters_limit_reranker_input():
+    cards = [
+        Card(
+            1,
+            "四阶超量",
+            "除外对手墓地的卡",
+            type=TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        ),
+        Card(
+            2,
+            "非超量",
+            "除外对手墓地的卡",
+            type=TYPE_MONSTER | TYPE_EFFECT,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        ),
+    ]
+    reranker = FakeReranker()
+    agent = CardRagAgent(cards, dense_retriever=MixedDenseRetriever(), reranker=reranker)
+
+    agent.retrieve("除外对手墓地的四星超量怪兽", top_k=5)
+
+    assert [candidate.card_id for candidate in reranker.received_candidates] == [1]
+
+
+def test_structured_filters_warn_when_no_cards_match():
+    warnings = []
+    cards = [
+        Card(
+            1,
+            "四阶超量",
+            "除外对手墓地的卡",
+            type=TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        )
+    ]
+    agent = CardRagAgent(cards, warning_callback=warnings.append)
+
+    retrieved = agent.retrieve("除外墓地的七阶超量怪兽", top_k=5)
+
+    assert retrieved == []
+    assert warnings
+    assert agent.last_filter_diagnostics.filtered_candidates == 0
