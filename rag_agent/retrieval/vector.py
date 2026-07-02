@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from rag_agent.cards import RetrievalDocument
 from rag_agent.retrieval.hybrid import Candidate
+from rag_agent.structured_query import StructuredQueryFilters
 
 
 @dataclass(frozen=True)
@@ -75,9 +76,16 @@ class ChromaVectorStore:
             embedding_function=self.embedding_function,
         )
 
-    def search(self, query: str, *, top_k: int = 10) -> list[Candidate]:
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[Candidate]:
         store = self.load()
-        results = store.similarity_search_with_score(query, k=top_k)
+        kwargs = {"filter": metadata_filter} if metadata_filter else {}
+        results = store.similarity_search_with_score(query, k=top_k, **kwargs)
         candidates: list[Candidate] = []
         for document, distance in results:
             metadata = dict(document.metadata)
@@ -110,3 +118,29 @@ def _clean_metadata(metadata: dict) -> dict:
         for key, value in metadata.items()
         if value is not None and isinstance(value, (str, int, float, bool))
     }
+
+
+def structured_filters_to_chroma_where(
+    filters: StructuredQueryFilters,
+) -> dict[str, Any] | None:
+    conditions: list[dict[str, Any]] = []
+    if filters.card_kind:
+        conditions.append({"card_kind": {"$eq": filters.card_kind}})
+    if filters.attribute:
+        conditions.append({"attribute_name": {"$eq": filters.attribute}})
+    if filters.race:
+        conditions.append({"race_name": {"$eq": filters.race}})
+    if filters.level is not None:
+        conditions.append({"decoded_level": {"$eq": filters.level}})
+    if filters.rank is not None:
+        conditions.append({"rank": {"$eq": filters.rank}})
+    if filters.link_rating is not None:
+        conditions.append({"link_rating": {"$eq": filters.link_rating}})
+    for monster_type in filters.monster_types:
+        conditions.append({f"is_{monster_type}": {"$eq": True}})
+
+    if not conditions:
+        return None
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"$and": conditions}

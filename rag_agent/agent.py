@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from rag_agent.cards import Card
 from rag_agent.retrieval.hybrid import Candidate, reciprocal_rank_fusion
 from rag_agent.retrieval.sparse import SparseCardRetriever
+from rag_agent.retrieval.vector import structured_filters_to_chroma_where
 from rag_agent.structured_query import (
     FilterDiagnostics,
     StructuredQuery,
@@ -24,7 +25,13 @@ class RetrievedCard:
 
 
 class Retriever(Protocol):
-    def search(self, query: str, *, top_k: int = 10) -> list[Candidate]:
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int = 10,
+        metadata_filter: dict[str, Any] | None = None,
+    ) -> list[Candidate]:
         ...
 
 
@@ -161,17 +168,32 @@ class CardRagAgent:
         retrieval_query = self._expand_query_with_referenced_card(
             structured_query.effect_query or query
         )
+        recall_top_k = (
+            min(len(candidate_cards), max(top_k, 100))
+            if structured_query.has_filters
+            else top_k
+        )
         sparse_retriever = (
             SparseCardRetriever.from_cards(candidate_cards)
             if structured_query.has_filters
             else self.sparse_retriever
         )
-        sparse_candidates = sparse_retriever.search(retrieval_query, top_k=top_k)
+        sparse_candidates = sparse_retriever.search(retrieval_query, top_k=recall_top_k)
         ranked_lists: list[list[Candidate]] = [sparse_candidates]
 
         if self.dense_retriever is not None:
-            dense_top_k = max(top_k, top_k * 20) if structured_query.has_filters else top_k
-            dense_candidates = self.dense_retriever.search(retrieval_query, top_k=dense_top_k)
+            dense_top_k = recall_top_k
+            dense_filter = (
+                structured_filters_to_chroma_where(structured_query.filters)
+                if structured_query.has_filters
+                else None
+            )
+            dense_candidates = self._search_dense(
+                retrieval_query,
+                top_k=dense_top_k,
+                metadata_filter=dense_filter,
+                fallback_top_k=max(top_k, top_k * 20),
+            )
             if structured_query.has_filters:
                 allowed_ids = {card.card_id for card in candidate_cards}
                 dense_candidates = [
@@ -184,6 +206,7 @@ class CardRagAgent:
         candidate_limit = max(
             top_k,
             rerank_candidates if self.reranker is not None else top_k * 3,
+            recall_top_k if structured_query.has_filters else top_k,
         )
         candidates = reciprocal_rank_fusion(ranked_lists, top_k=candidate_limit)
         if self.reranker is not None:
@@ -235,3 +258,29 @@ class CardRagAgent:
     def _warn(self, warning: str) -> None:
         if self.warning_callback is not None:
             self.warning_callback(warning)
+
+    def _search_dense(
+        self,
+        query: str,
+        *,
+        top_k: int,
+        metadata_filter: dict[str, Any] | None,
+        fallback_top_k: int,
+    ) -> list[Candidate]:
+        if self.dense_retriever is None:
+            return []
+        if metadata_filter is None:
+            return self.dense_retriever.search(query, top_k=top_k)
+        try:
+            return self.dense_retriever.search(
+                query,
+                top_k=top_k,
+                metadata_filter=metadata_filter,
+            )
+        except Exception as exc:
+            self._warn(
+                "Dense metadata filtering failed; falling back to dense post-filter "
+                f"candidate order. Rebuild Chroma with `build-index --reset` to enable "
+                f"metadata filtering. Cause: {exc}"
+            )
+            return self.dense_retriever.search(query, top_k=fallback_top_k)

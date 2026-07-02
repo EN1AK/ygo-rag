@@ -200,3 +200,115 @@ def test_structured_filters_warn_when_no_cards_match():
     assert retrieved == []
     assert warnings
     assert agent.last_filter_diagnostics.filtered_candidates == 0
+
+
+class MetadataAwareDenseRetriever:
+    def __init__(self):
+        self.calls = []
+
+    def search(self, query, *, top_k=10, metadata_filter=None):
+        self.calls.append((query, top_k, metadata_filter))
+        return [
+            Candidate(1, 0.9, "dense", {"name": "四阶超量", "desc": "除外对手墓地"})
+        ]
+
+
+def test_structured_filters_pass_metadata_filter_to_dense_retriever():
+    cards = [
+        Card(
+            index,
+            f"四阶超量{index}",
+            "除外对手墓地的卡",
+            type=TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        )
+        for index in range(1, 121)
+    ]
+    dense = MetadataAwareDenseRetriever()
+    agent = CardRagAgent(cards, dense_retriever=dense)
+
+    agent.retrieve("效果是除外对手墓地卡的四星超量怪兽", top_k=10)
+
+    assert dense.calls
+    assert dense.calls[0][1] == 100
+    assert dense.calls[0][2] == {
+        "$and": [
+            {"card_kind": {"$eq": "monster"}},
+            {"rank": {"$eq": 4}},
+            {"is_xyz": {"$eq": True}},
+        ]
+    }
+
+
+class FailingMetadataDenseRetriever:
+    def __init__(self):
+        self.calls = []
+
+    def search(self, query, *, top_k=10, metadata_filter=None):
+        self.calls.append((top_k, metadata_filter))
+        if metadata_filter is not None:
+            raise RuntimeError("missing metadata field")
+        return [
+            Candidate(1, 0.9, "dense", {"name": "四阶超量", "desc": "除外对手墓地"})
+        ]
+
+
+def test_dense_metadata_filter_failure_falls_back_and_warns():
+    warnings = []
+    cards = [
+        Card(
+            1,
+            "四阶超量",
+            "除外对手墓地的卡",
+            type=TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        )
+    ]
+    dense = FailingMetadataDenseRetriever()
+    agent = CardRagAgent(cards, dense_retriever=dense, warning_callback=warnings.append)
+
+    retrieved = agent.retrieve("效果是除外对手墓地卡的四星超量怪兽", top_k=10)
+
+    assert [card.card_id for card in retrieved] == [1]
+    assert dense.calls[0][1] is not None
+    assert dense.calls[1] == (200, None)
+    assert warnings
+    assert "Dense metadata filtering failed" in warnings[0]
+
+
+def test_structured_sparse_recall_pool_keeps_candidate_below_final_top_k_for_rerank():
+    cards = []
+    for index in range(1, 37):
+        cards.append(
+            Card(
+                index,
+                f"高字面匹配{index}",
+                "除外对手墓地卡。除外对手墓地卡。",
+                type=TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,
+                attribute=0x20,
+                race=0x2000,
+                level=4,
+            )
+        )
+    cards.append(
+        Card(
+            80,
+            "No.80 狂装霸王 狂想战曲王",
+            "把这张卡1个超量素材取除，以对方墓地1张卡为对象才能发动。那张卡除外。",
+            type=TYPE_MONSTER | TYPE_EFFECT | TYPE_XYZ,
+            attribute=0x20,
+            race=0x2000,
+            level=4,
+        )
+    )
+    reranker = FakeReranker()
+    agent = CardRagAgent(cards, reranker=reranker)
+
+    agent.retrieve("效果是除外对手墓地卡的四星超量怪兽", top_k=10)
+
+    assert 80 in [candidate.card_id for candidate in reranker.received_candidates]
+    assert len(reranker.received_candidates) >= 37

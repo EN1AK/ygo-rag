@@ -101,6 +101,14 @@ $env:HF_HUB_OFFLINE="1"
 
 注意：如果 Chroma 索引数量少于 `cards.cdb` 中的卡片数量，`query --semantic` 会跳过 dense retrieval 并输出 warning，避免 partial index 污染结果。需要完整 semantic retrieval 时，必须不带 `--limit` 构建全量索引。
 
+注意：结构化过滤的 dense metadata filter 依赖 Chroma 文档里的新版 metadata（例如 `is_xyz`、`rank`、`decoded_level`）。如果你的索引是在该功能加入前构建的，需要重建：
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent build-index --db data/cards.cdb --batch-size 10 --reset
+```
+
+否则查询仍会 fallback 到旧的 dense 检索后过滤逻辑，并输出 warning。
+
 ## Query
 
 离线 sparse baseline：

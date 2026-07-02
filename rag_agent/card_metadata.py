@@ -124,7 +124,7 @@ class CardStructure:
     defense: int | None = None
 
     def to_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "card_kind": self.card_kind,
             "monster_types": ",".join(self.monster_types) if self.monster_types else None,
             "type_names": ",".join(self.type_names) if self.type_names else None,
@@ -138,6 +138,26 @@ class CardStructure:
             "decoded_atk": self.attack,
             "decoded_def": self.defense,
         }
+        for monster_type in (
+            "normal",
+            "effect",
+            "fusion",
+            "ritual",
+            "synchro",
+            "xyz",
+            "pendulum",
+            "link",
+            "tuner",
+            "flip",
+            "spirit",
+            "union",
+            "gemini",
+            "toon",
+            "token",
+            "special_summon",
+        ):
+            metadata[f"is_{monster_type}"] = monster_type in self.monster_types
+        return metadata
 
     @property
     def type_names(self) -> tuple[str, ...]:
