@@ -11,12 +11,23 @@ from rag_agent.query_service import (
     build_structured_response,
     execute_query,
 )
+from rag_agent.translation_service import (
+    TranslationRequest,
+    TranslationResponse,
+    execute_translation,
+    translation_response_to_dict,
+)
 
 QueryHandler = Callable[[QueryRequest], QueryResponse]
+TranslationHandler = Callable[[TranslationRequest], TranslationResponse]
 
 
-def create_app(query_handler: QueryHandler | None = None):
+def create_app(
+    query_handler: QueryHandler | None = None,
+    translation_handler: TranslationHandler | None = None,
+):
     handler = query_handler or _default_query_handler
+    translate = translation_handler or _default_translation_handler
 
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -49,6 +60,12 @@ def create_app(query_handler: QueryHandler | None = None):
                         ),
                     ),
                 )
+                return
+            if method == "POST" and path == "/api/translate":
+                payload = await _read_json_body(receive)
+                request = parse_translation_request(payload)
+                response = translate(request)
+                await _send_response(send, 200, translation_response_to_dict(response))
                 return
             await _send_response(send, 404, {"error": "Not found."})
         except ValueError as exc:
@@ -89,6 +106,32 @@ def parse_query_request(payload: Mapping[str, Any]) -> QueryRequest:
             "rerank_candidates",
             minimum=1,
             maximum=200,
+        ),
+    )
+
+
+def parse_translation_request(payload: Mapping[str, Any]) -> TranslationRequest:
+    forbidden_keys = {
+        "api_key",
+        "deepseek_api_key",
+        "DEEPSEEK_API_KEY",
+        "authorization",
+    }
+    if any(key in payload for key in forbidden_keys):
+        raise ValueError("DeepSeek credentials must be configured in the server environment.")
+
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        raise ValueError("text is required.")
+    return TranslationRequest(
+        text=text,
+        source_lang=str(payload.get("source_lang") or "auto").strip() or "auto",
+        target_lang=str(payload.get("target_lang") or "zh-CN").strip() or "zh-CN",
+        structured_max_block_chars=_optional_int_in_range(
+            payload.get("structured_max_block_chars"),
+            "structured_max_block_chars",
+            minimum=1,
+            maximum=4000,
         ),
     )
 
@@ -257,6 +300,10 @@ function escapeHtml(value) {
 
 def _default_query_handler(request: QueryRequest) -> QueryResponse:
     return execute_query(request, Settings.from_env())
+
+
+def _default_translation_handler(request: TranslationRequest) -> TranslationResponse:
+    return execute_translation(request, Settings.from_env())
 
 
 async def _read_json_body(receive) -> dict[str, Any]:

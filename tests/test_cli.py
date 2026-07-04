@@ -3,7 +3,12 @@ import os
 import subprocess
 import sys
 
+import rag_agent.__main__ as cli
 from rag_agent.card_metadata import TYPE_EFFECT, TYPE_MONSTER, TYPE_XYZ
+from rag_agent.translation_service import (
+    TranslationResponse,
+    build_structured_translation_response,
+)
 
 
 def create_mini_cards_db(path):
@@ -49,6 +54,7 @@ def test_cli_help_lists_commands():
     assert "inspect-db" in result.stdout
     assert "build-index" in result.stdout
     assert "query" in result.stdout
+    assert "translate" in result.stdout
     assert "web" in result.stdout
 
 
@@ -60,6 +66,81 @@ def test_cli_query_help_lists_rag_mode_flags():
     assert "--rerank" in result.stdout
     assert "--llm-rerank" in result.stdout
     assert "--llm" in result.stdout
+
+
+def test_cli_translate_help_lists_language_options():
+    result = run_cli("translate", "--help")
+
+    assert result.returncode == 0
+    assert "--source-lang" in result.stdout
+    assert "--target-lang" in result.stdout
+    assert "--structured-max-block-chars" in result.stdout
+
+
+def test_cli_translate_defaults_to_chinese(monkeypatch, capsys):
+    seen = {}
+
+    def fake_execute_translation(request, settings):
+        seen["request"] = request
+        return TranslationResponse(
+            translation="你好",
+            source_lang=request.source_lang,
+            target_lang=request.target_lang,
+            warnings=[],
+            structured=build_structured_translation_response(
+                "你好",
+                source_lang=request.source_lang,
+                target_lang=request.target_lang,
+            ),
+        )
+
+    monkeypatch.setattr(cli, "execute_translation", fake_execute_translation)
+
+    result = cli.main(["translate", "hello"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out.strip() == "你好"
+    assert seen["request"].text == "hello"
+    assert seen["request"].source_lang == "auto"
+    assert seen["request"].target_lang == "zh-CN"
+
+
+def test_cli_translate_accepts_explicit_target_language(monkeypatch, capsys):
+    seen = {}
+
+    def fake_execute_translation(request, settings):
+        seen["request"] = request
+        return TranslationResponse(
+            translation="hello",
+            source_lang=request.source_lang,
+            target_lang=request.target_lang,
+            warnings=[],
+            structured=build_structured_translation_response(
+                "hello",
+                source_lang=request.source_lang,
+                target_lang=request.target_lang,
+            ),
+        )
+
+    monkeypatch.setattr(cli, "execute_translation", fake_execute_translation)
+
+    result = cli.main(["translate", "你好", "--target-lang", "en"])
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out.strip() == "hello"
+    assert seen["request"].source_lang == "auto"
+    assert seen["request"].target_lang == "en"
+
+
+def test_cli_translate_empty_input_uses_error_handling(capsys):
+    result = cli.main(["translate", " "])
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.err.startswith("error:")
+    assert "text is required" in captured.err
 
 
 def test_cli_inspect_db_reports_counts(tmp_path):

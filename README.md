@@ -256,6 +256,90 @@ structured.blocks[*].text
 }
 ```
 
+## Translation API / Bot Integration
+
+The browser Web UI stays focused on card RAG search, but the same local service also exposes a backend translation endpoint for bots:
+
+```text
+POST http://127.0.0.1:7860/api/translate
+```
+
+Request example:
+
+```json
+{
+  "text": "Once per turn: You can target 1 card on the field; destroy it.",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "structured_max_block_chars": 500
+}
+```
+
+`source_lang` defaults to `auto`, and `target_lang` defaults to `zh-CN`. If a user prompt clearly asks for another direction, pass the requested target language:
+
+```json
+{
+  "text": "你好",
+  "target_lang": "en"
+}
+```
+
+Response shape:
+
+```json
+{
+  "translation": "...",
+  "source_lang": "en",
+  "target_lang": "zh-CN",
+  "warnings": [],
+  "structured": {
+    "version": 1,
+    "summary": {
+      "block_count": 1,
+      "split": false,
+      "truncated": false
+    },
+    "blocks": [
+      {
+        "type": "translation",
+        "index": 1,
+        "text": "...",
+        "truncated": false,
+        "split": false,
+        "fields": {
+          "source_lang": "en",
+          "target_lang": "zh-CN",
+          "part": 1,
+          "total_parts": 1
+        }
+      }
+    ]
+  }
+}
+```
+
+Bot callers can send:
+
+```text
+structured.blocks[*].text
+```
+
+DeepSeek credentials are still read from the server environment. Do not send API keys in the request body.
+
+## Translate CLI
+
+The translation service can also be tested from the command line:
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent translate "Once per turn: You can target 1 card on the field; destroy it."
+```
+
+By default this translates to Chinese. Explicit language direction is supported:
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent translate "你好" --source-lang zh-CN --target-lang en
+```
+
 ## Structured Filters
 
 查询中包含明确的卡片结构条件时，系统会先按 `cards.cdb` 元数据过滤候选卡，再做 sparse / Chroma / rerank 排序。例如：

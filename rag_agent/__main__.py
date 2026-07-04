@@ -13,6 +13,7 @@ from rag_agent.cards import card_to_document
 from rag_agent.retrieval.embeddings import BgeM3Embeddings
 from rag_agent.retrieval.vector import ChromaConfig, ChromaVectorStore
 from rag_agent.query_service import QueryRequest, execute_query
+from rag_agent.translation_service import TranslationRequest, execute_translation
 
 
 def download_db(url: str, destination: Path) -> int:
@@ -104,6 +105,29 @@ def query_cards(
     return 0
 
 
+def translate_text(
+    text: str,
+    settings: Settings,
+    *,
+    source_lang: str = "auto",
+    target_lang: str = "zh-CN",
+    structured_max_block_chars: int | None = None,
+) -> int:
+    response = execute_translation(
+        TranslationRequest(
+            text=text,
+            source_lang=source_lang,
+            target_lang=target_lang,
+            structured_max_block_chars=structured_max_block_chars,
+        ),
+        settings,
+    )
+    for warning in response.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
+    print(response.translation)
+    return 0
+
+
 def run_web(host: str, port: int) -> int:
     try:
         import uvicorn
@@ -163,6 +187,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="synthesize final answer with DeepSeek through LangChain",
     )
 
+    translate = subparsers.add_parser("translate", help="translate arbitrary text")
+    translate.add_argument("text")
+    translate.add_argument(
+        "--source-lang",
+        default="auto",
+        help="source language, or auto to let the model infer it",
+    )
+    translate.add_argument(
+        "--target-lang",
+        default="zh-CN",
+        help="target language; defaults to zh-CN",
+    )
+    translate.add_argument(
+        "--structured-max-block-chars",
+        type=int,
+        default=None,
+        help="optional maximum structured bot message block length",
+    )
+
     web = subparsers.add_parser("web", help="start local web UI")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=7860)
@@ -197,6 +240,14 @@ def main(argv: list[str] | None = None) -> int:
                 llm_rerank=args.llm_rerank,
                 use_llm=args.llm,
                 rerank_candidates=args.rerank_candidates,
+            )
+        if args.command == "translate":
+            return translate_text(
+                args.text,
+                settings,
+                source_lang=args.source_lang,
+                target_lang=args.target_lang,
+                structured_max_block_chars=args.structured_max_block_chars,
             )
         if args.command == "web":
             return run_web(args.host, args.port)

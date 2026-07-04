@@ -2,6 +2,10 @@ import asyncio
 import json
 
 from rag_agent.query_service import QueryResponse
+from rag_agent.translation_service import (
+    TranslationResponse,
+    build_structured_translation_response,
+)
 from rag_agent.web import create_app, query_response_to_dict, render_index_html
 
 
@@ -14,6 +18,7 @@ def test_render_index_html_contains_query_form():
     assert "rerank" in html
     assert "llm_rerank" in html
     assert "llm" in html
+    assert "api/translate" not in html
 
 
 def test_web_api_returns_structured_query_response():
@@ -88,6 +93,93 @@ def test_query_response_to_dict_includes_structured_filter_diagnostics():
     assert payload["filter_diagnostics"]["filtered_candidates"] == 1
     assert payload["structured"]["structured_query"]["filters"]["rank"] == 4
     assert payload["structured"]["filter_diagnostics"]["filtered_candidates"] == 1
+
+
+def test_web_api_returns_translation_response():
+    def fake_translation_handler(request):
+        assert request.text == "hello"
+        assert request.source_lang == "en"
+        assert request.target_lang == "zh-CN"
+        assert request.structured_max_block_chars == 4
+        return TranslationResponse(
+            translation="你好世界",
+            source_lang=request.source_lang,
+            target_lang=request.target_lang,
+            warnings=[],
+            structured=build_structured_translation_response(
+                "你好世界",
+                source_lang=request.source_lang,
+                target_lang=request.target_lang,
+                max_block_chars=request.structured_max_block_chars,
+            ),
+        )
+
+    app = create_app(translation_handler=fake_translation_handler)
+    response = asyncio.run(
+        call_asgi_app(
+            app,
+            "POST",
+            "/api/translate",
+            {
+                "text": "hello",
+                "source_lang": "en",
+                "target_lang": "zh-CN",
+                "structured_max_block_chars": 4,
+            },
+        )
+    )
+
+    assert response["status"] == 200
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert payload["translation"] == "你好世界"
+    assert payload["source_lang"] == "en"
+    assert payload["target_lang"] == "zh-CN"
+    assert payload["warnings"] == []
+    assert payload["structured"]["blocks"][0]["type"] == "translation"
+    assert len(payload["structured"]["blocks"][0]["text"]) <= 4
+
+
+def test_web_translation_api_rejects_empty_text():
+    app = create_app()
+    response = asyncio.run(
+        call_asgi_app(app, "POST", "/api/translate", {"text": " "})
+    )
+
+    assert response["status"] == 400
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert "text is required" in payload["error"]
+
+
+def test_web_translation_api_rejects_invalid_block_length():
+    app = create_app()
+    response = asyncio.run(
+        call_asgi_app(
+            app,
+            "POST",
+            "/api/translate",
+            {"text": "hello", "structured_max_block_chars": 0},
+        )
+    )
+
+    assert response["status"] == 400
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert "structured_max_block_chars must be between 1 and 4000" in payload["error"]
+
+
+def test_web_translation_api_rejects_request_credentials():
+    app = create_app()
+    response = asyncio.run(
+        call_asgi_app(
+            app,
+            "POST",
+            "/api/translate",
+            {"text": "hello", "api_key": "secret"},
+        )
+    )
+
+    assert response["status"] == 400
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert "server environment" in payload["error"]
 
 
 async def call_asgi_app(app, method, path, payload=None):
