@@ -1,0 +1,8 @@
+{
+  "expected_card_ids": [13203964, 68625623, 94014327],
+  "expected_evidence_ids": [
+    "ygocdb:faq:24336",
+    "ygocdb:supplement:68625623"
+  ],
+  "require_sufficient": true
+}

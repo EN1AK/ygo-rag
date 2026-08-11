@@ -3,7 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from rag_agent.card_metadata import decode_card_structure
+from rag_agent.card_metadata import (
+    decode_card_structure,
+    decode_effect_category_labels,
+    effect_categories_to_metadata,
+)
 
 
 @dataclass(frozen=True)
@@ -33,7 +37,15 @@ def normalize_effect_text(text: str) -> str:
 
 def card_to_document(card: Card) -> RetrievalDocument:
     description = normalize_effect_text(card.description)
-    page_content = f"卡名：{card.name}\n效果：{description}"
+    effect_category_labels = decode_effect_category_labels(card.category)
+    effect_tags_text = " ".join(effect_category_labels)
+    page_content_parts = [
+        f"卡名：{card.name}",
+        f"效果：{description}",
+    ]
+    if effect_tags_text:
+        page_content_parts.append(f"效果标签：{effect_tags_text}")
+    page_content = "\n".join(page_content_parts)
     structure = decode_card_structure(
         type_value=card.type,
         attribute_value=card.attribute,
@@ -53,5 +65,5 @@ def card_to_document(card: Card) -> RetrievalDocument:
         "def": card.defense,
         "level": card.level,
         "category": card.category,
-    } | structure.to_metadata()
+    } | structure.to_metadata() | effect_categories_to_metadata(card.category)
     return RetrievalDocument(page_content=page_content, metadata=metadata)

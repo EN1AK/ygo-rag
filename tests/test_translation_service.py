@@ -27,10 +27,10 @@ def test_translation_request_rejects_empty_text():
 def test_translation_prompt_preserves_default_language_direction():
     prompt = build_translation_prompt(TranslationRequest(text="hello"))
 
-    assert "Source language: auto" in prompt
-    assert "Target language: zh-CN" in prompt
+    assert "源语言：auto" in prompt
+    assert "目标语言：zh-CN" in prompt
     assert "<text>\nhello\n</text>" in prompt
-    assert "Do not add explanations" in prompt
+    assert "不要添加解释" in prompt
 
 
 def test_translation_prompt_supports_explicit_language_direction():
@@ -38,8 +38,8 @@ def test_translation_prompt_supports_explicit_language_direction():
         TranslationRequest(text="你好", source_lang="zh-CN", target_lang="en")
     )
 
-    assert "Source language: zh-CN" in prompt
-    assert "Target language: en" in prompt
+    assert "源语言：zh-CN" in prompt
+    assert "目标语言：en" in prompt
     assert "<text>\n你好\n</text>" in prompt
 
 

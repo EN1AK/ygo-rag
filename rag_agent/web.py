@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from rag_agent.config import Settings
+from rag_agent.adjudication_service import (
+    AdjudicationRequest,
+    AdjudicationResponse,
+    adjudication_response_to_dict,
+    execute_adjudication,
+)
 from rag_agent.query_service import (
     QueryRequest,
     QueryResponse,
@@ -17,17 +23,28 @@ from rag_agent.translation_service import (
     execute_translation,
     translation_response_to_dict,
 )
+from rag_agent.assistant_agent import (
+    AssistantAgentRequest,
+    AssistantAgentResponse,
+    execute_assistant_agent,
+)
 
 QueryHandler = Callable[[QueryRequest], QueryResponse]
 TranslationHandler = Callable[[TranslationRequest], TranslationResponse]
+AdjudicationHandler = Callable[[AdjudicationRequest], AdjudicationResponse]
+AssistantHandler = Callable[[AssistantAgentRequest], AssistantAgentResponse]
 
 
 def create_app(
     query_handler: QueryHandler | None = None,
     translation_handler: TranslationHandler | None = None,
+    adjudication_handler: AdjudicationHandler | None = None,
+    assistant_handler: AssistantHandler | None = None,
 ):
     handler = query_handler or _default_query_handler
     translate = translation_handler or _default_translation_handler
+    adjudicate = adjudication_handler or _default_adjudication_handler
+    run_assistant = assistant_handler or _default_assistant_handler
 
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -66,6 +83,24 @@ def create_app(
                 request = parse_translation_request(payload)
                 response = translate(request)
                 await _send_response(send, 200, translation_response_to_dict(response))
+                return
+            if method == "POST" and path == "/api/adjudicate":
+                payload = await _read_json_body(receive)
+                request = parse_adjudication_request(payload)
+                response = adjudicate(request)
+                await _send_response(send, 200, adjudication_response_to_dict(response))
+                return
+            if method == "POST" and path == "/api/agent":
+                payload = await _read_json_body(receive)
+                request = parse_assistant_request(payload)
+                response = run_assistant(request)
+                await _send_response(
+                    send,
+                    200,
+                    response.to_dict(
+                        include_trace=_as_bool(payload.get("trace", False))
+                    ),
+                )
                 return
             await _send_response(send, 404, {"error": "Not found."})
         except ValueError as exc:
@@ -127,6 +162,62 @@ def parse_translation_request(payload: Mapping[str, Any]) -> TranslationRequest:
         text=text,
         source_lang=str(payload.get("source_lang") or "auto").strip() or "auto",
         target_lang=str(payload.get("target_lang") or "zh-CN").strip() or "zh-CN",
+        structured_max_block_chars=_optional_int_in_range(
+            payload.get("structured_max_block_chars"),
+            "structured_max_block_chars",
+            minimum=1,
+            maximum=4000,
+        ),
+    )
+
+
+def parse_adjudication_request(payload: Mapping[str, Any]) -> AdjudicationRequest:
+    settings = Settings.from_env()
+    scenario = str(payload.get("scenario", payload.get("query", ""))).strip()
+    if not scenario:
+        raise ValueError("scenario text is required.")
+    return AdjudicationRequest(
+        scenario=scenario,
+        db_path=Path(str(payload.get("db_path") or settings.cards_db_path).strip()),
+        ygocdb_cache_path=_optional_path(payload.get("ygocdb_cache_path")),
+        rules_epub_path=_optional_path(payload.get("rules_epub_path")),
+        use_llm=_as_bool(payload.get("llm", payload.get("use_llm", False))),
+        simulate=_as_bool(payload.get("simulate", False)),
+        allow_ygocdb_fetch=_as_bool(payload.get("allow_ygocdb_fetch", False)),
+        use_agent=_as_bool(payload.get("agent", payload.get("use_agent", False))),
+        include_trace=_as_bool(payload.get("trace", payload.get("include_trace", False))),
+    )
+
+
+def parse_assistant_request(payload: Mapping[str, Any]) -> AssistantAgentRequest:
+    forbidden_keys = {
+        "api_key",
+        "deepseek_api_key",
+        "DEEPSEEK_API_KEY",
+        "authorization",
+    }
+    if any(key in payload for key in forbidden_keys):
+        raise ValueError("DeepSeek credentials must be configured in the server environment.")
+    settings = Settings.from_env()
+    text = str(payload.get("text", payload.get("query", ""))).strip()
+    if not text:
+        raise ValueError("text is required.")
+    rerank_provider = _parse_rerank_provider(payload)
+    return AssistantAgentRequest(
+        text=text,
+        db_path=Path(str(payload.get("db_path") or settings.cards_db_path).strip()),
+        semantic=_as_bool(payload.get("semantic", False)),
+        rerank=_as_bool(payload.get("rerank", False)),
+        rerank_provider=rerank_provider,
+        max_steps=_int_in_range(
+            payload.get("max_steps", 6),
+            "max_steps",
+            minimum=1,
+            maximum=20,
+        ),
+        ygocdb_cache_path=_optional_path(payload.get("ygocdb_cache_path")),
+        rules_epub_path=_optional_path(payload.get("rules_epub_path")),
+        include_specialist_trace=_as_bool(payload.get("specialist_trace", False)),
         structured_max_block_chars=_optional_int_in_range(
             payload.get("structured_max_block_chars"),
             "structured_max_block_chars",
@@ -215,11 +306,43 @@ def render_index_html() -> str:
     <button id="submit" type="submit">查询</button>
   </form>
   <section id="output" class="panel" hidden></section>
+  <section class="panel">
+    <h2>AI 裁定</h2>
+    <form id="adjudication-form">
+      <label for="scenario">具体情景</label>
+      <textarea id="scenario" name="scenario">双方场上都只有一只怪兽的时候，对方发动破坏效果，我方怪兽可以代替破坏吗？</textarea>
+      <div class="grid">
+        <div>
+          <label for="adjudication_db_path">cards.cdb 路径</label>
+          <input id="adjudication_db_path" name="db_path" value="data/cards.cdb">
+        </div>
+        <div>
+          <label for="ygocdb_cache_path">ygocdb cache</label>
+          <input id="ygocdb_cache_path" name="ygocdb_cache_path" value="data/ygocdb">
+        </div>
+        <div>
+          <label for="rules_epub_path">OCG rules EPUB</label>
+          <input id="rules_epub_path" name="rules_epub_path" value="ocg-rule-readthedocs-io-zh-cn-latest.epub">
+        </div>
+      </div>
+      <div class="checks">
+        <label><input id="adjudication_llm" name="llm" type="checkbox"> DeepSeek LLM</label>
+        <label><input id="adjudication_agent" name="agent" type="checkbox"> LangGraph agent</label>
+        <label><input id="adjudication_trace" name="trace" type="checkbox"> trace</label>
+        <label><input id="simulate" name="simulate" type="checkbox"> simulation</label>
+      </div>
+      <button id="adjudication-submit" type="submit">裁定</button>
+    </form>
+    <div id="adjudication-output" class="answer" hidden></div>
+  </section>
 </main>
 <script>
 const form = document.querySelector("#query-form");
 const output = document.querySelector("#output");
 const submit = document.querySelector("#submit");
+const adjudicationForm = document.querySelector("#adjudication-form");
+const adjudicationOutput = document.querySelector("#adjudication-output");
+const adjudicationSubmit = document.querySelector("#adjudication-submit");
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -248,6 +371,34 @@ form.addEventListener("submit", async (event) => {
   } finally {
     submit.disabled = false;
     submit.textContent = "查询";
+  }
+});
+
+adjudicationForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  adjudicationSubmit.disabled = true;
+  adjudicationSubmit.textContent = "裁定中...";
+  adjudicationOutput.hidden = false;
+  adjudicationOutput.textContent = "正在收集裁定和规则证据...";
+  const payload = Object.fromEntries(new FormData(adjudicationForm).entries());
+  payload.llm = document.querySelector("#adjudication_llm").checked;
+  payload.agent = document.querySelector("#adjudication_agent").checked;
+  payload.trace = document.querySelector("#adjudication_trace").checked;
+  payload.simulate = document.querySelector("#simulate").checked;
+  try {
+    const res = await fetch("/api/adjudicate", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "请求失败");
+    adjudicationOutput.innerHTML = `<h3>回答</h3><div>${escapeHtml(data.answer || "")}</div><h3>证据</h3>${renderEvidence(data.evidence || [])}${renderAgentTrace(data.agent_trace || [])}`;
+  } catch (error) {
+    adjudicationOutput.innerHTML = `<p class="warning">${escapeHtml(error.message)}</p>`;
+  } finally {
+    adjudicationSubmit.disabled = false;
+    adjudicationSubmit.textContent = "裁定";
   }
 });
 
@@ -284,6 +435,38 @@ function renderFilterInfo(data) {
   `;
 }
 
+function renderEvidence(items) {
+  if (!items.length) return "<p class='muted'>无证据</p>";
+  return items.map(item => `
+    <div class="card">
+      <div class="card-title">${escapeHtml(item.evidence_id)} <span class="muted">${escapeHtml(item.kind)} / ${escapeHtml(item.relationship)}</span></div>
+      <p>${escapeHtml(item.title || "")}</p>
+      <p class="muted">${escapeHtml(item.text || "")}</p>
+    </div>
+  `).join("");
+}
+
+function renderAgentTrace(items) {
+  if (!items.length) return "";
+  const rows = items.map((entry, index) => {
+    const metadata = entry.metadata || {};
+    const action = metadata.action || {};
+    const observation = metadata.observation || {};
+    const args = action.arguments ? JSON.stringify(action.arguments) : "";
+    const evidenceIds = (observation.evidence_ids || metadata.evidence_ids || []).join(", ");
+    return `
+      <div class="card">
+        <div class="card-title">${index + 1}. ${escapeHtml(entry.node || "")} <span class="muted">${escapeHtml(action.tool || "")}</span></div>
+        <p>${escapeHtml(entry.summary || "")}</p>
+        ${args ? `<p class="muted">args: <code>${escapeHtml(args)}</code></p>` : ""}
+        ${observation.summary ? `<p class="muted">observation: ${escapeHtml(observation.summary)}</p>` : ""}
+        ${evidenceIds ? `<p class="muted">evidence: ${escapeHtml(evidenceIds)}</p>` : ""}
+      </div>
+    `;
+  }).join("");
+  return `<h3>Agent Trace</h3>${rows}`;
+}
+
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({
     "&": "&amp;",
@@ -304,6 +487,21 @@ def _default_query_handler(request: QueryRequest) -> QueryResponse:
 
 def _default_translation_handler(request: TranslationRequest) -> TranslationResponse:
     return execute_translation(request, Settings.from_env())
+
+
+def _default_adjudication_handler(request: AdjudicationRequest) -> AdjudicationResponse:
+    return execute_adjudication(request, Settings.from_env())
+
+
+def _default_assistant_handler(request: AssistantAgentRequest) -> AssistantAgentResponse:
+    return execute_assistant_agent(request, Settings.from_env())
+
+
+def _optional_path(value: Any) -> Path | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return Path(text) if text else None
 
 
 async def _read_json_body(receive) -> dict[str, Any]:

@@ -265,6 +265,7 @@ class SubprocessReranker:
         env = os.environ.copy()
         env["RAG_DEVICE"] = self.device
         env["RAG_RERANKER_DEVICE"] = self.device
+        env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         env.setdefault("USE_TF", "0")
         env.setdefault("USE_FLAX", "0")

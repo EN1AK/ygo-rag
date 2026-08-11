@@ -2,10 +2,10 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .venv/
-data/cards.cdb
-data/chroma/
-data/index/
 models/
 .env
+.idea/
+*.epub
 
-/tests/
+/data/*
+!/data/.gitkeep

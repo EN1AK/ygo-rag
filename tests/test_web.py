@@ -2,11 +2,25 @@ import asyncio
 import json
 
 from rag_agent.query_service import QueryResponse
+from rag_agent.adjudication import (
+    AdjudicationResponse,
+    ParsedScenario,
+    SimulationStatus,
+)
 from rag_agent.translation_service import (
     TranslationResponse,
     build_structured_translation_response,
 )
-from rag_agent.web import create_app, query_response_to_dict, render_index_html
+from rag_agent.assistant_agent import (
+    AssistantAgentResponse,
+    AssistantToolObservation,
+)
+from rag_agent.web import (
+    create_app,
+    parse_assistant_request,
+    query_response_to_dict,
+    render_index_html,
+)
 
 
 def test_render_index_html_contains_query_form():
@@ -18,6 +32,10 @@ def test_render_index_html_contains_query_form():
     assert "rerank" in html
     assert "llm_rerank" in html
     assert "llm" in html
+    assert "api/adjudicate" in html
+    assert "adjudication_agent" in html
+    assert "adjudication_trace" in html
+    assert "renderAgentTrace" in html
     assert "api/translate" not in html
 
 
@@ -139,6 +157,65 @@ def test_web_api_returns_translation_response():
     assert len(payload["structured"]["blocks"][0]["text"]) <= 4
 
 
+def test_web_agent_api_returns_unified_structured_response():
+    def fake_assistant_handler(request):
+        assert request.text == "查找我身作盾并翻译效果"
+        assert request.semantic is True
+        assert request.rerank_provider == "llm"
+        assert request.max_steps == 4
+        return AssistantAgentResponse(
+            answer="已查卡并翻译。",
+            tool_results=(
+                AssistantToolObservation(
+                    tool="search_cards",
+                    ok=True,
+                    summary="查卡完成。",
+                    data={"results": [{"name": "我身作盾"}]},
+                ),
+            ),
+            warnings=(),
+            trace=(),
+        )
+
+    app = create_app(assistant_handler=fake_assistant_handler)
+    response = asyncio.run(
+        call_asgi_app(
+            app,
+            "POST",
+            "/api/agent",
+            {
+                "text": "查找我身作盾并翻译效果",
+                "semantic": True,
+                "llm_rerank": True,
+                "max_steps": 4,
+            },
+        )
+    )
+
+    assert response["status"] == 200
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert payload["answer"] == "已查卡并翻译。"
+    assert payload["structured"]["summary"]["tool_call_count"] == 1
+    assert payload["structured"]["blocks"][0]["tool"] == "search_cards"
+    assert "trace" not in payload
+
+
+def test_parse_web_agent_request_rejects_credentials_and_bad_steps():
+    try:
+        parse_assistant_request({"text": "hello", "api_key": "secret"})
+    except ValueError as exc:
+        assert "server environment" in str(exc)
+    else:
+        raise AssertionError("credentials should be rejected")
+
+    try:
+        parse_assistant_request({"text": "hello", "max_steps": 0})
+    except ValueError as exc:
+        assert "max_steps must be between 1 and 20" in str(exc)
+    else:
+        raise AssertionError("invalid max_steps should be rejected")
+
+
 def test_web_translation_api_rejects_empty_text():
     app = create_app()
     response = asyncio.run(
@@ -180,6 +257,56 @@ def test_web_translation_api_rejects_request_credentials():
     assert response["status"] == 400
     payload = json.loads(response["body"].decode("utf-8"))
     assert "server environment" in payload["error"]
+
+
+def test_web_adjudication_api_returns_response():
+    def fake_adjudication_handler(request):
+        assert request.scenario == "Can Alpha apply?"
+        assert request.simulate is True
+        assert request.use_agent is True
+        assert request.include_trace is True
+        return AdjudicationResponse(
+            scenario=ParsedScenario(original_text=request.scenario),
+            resolved_cards=(),
+            evidence=(),
+            reasoning=(),
+            answer="Answer",
+            confidence="low",
+            warnings=["missing evidence"],
+            simulation=SimulationStatus(status="not_available"),
+        )
+
+    app = create_app(adjudication_handler=fake_adjudication_handler)
+    response = asyncio.run(
+        call_asgi_app(
+            app,
+            "POST",
+            "/api/adjudicate",
+            {
+                "scenario": "Can Alpha apply?",
+                "simulate": True,
+                "agent": True,
+                "trace": True,
+            },
+        )
+    )
+
+    assert response["status"] == 200
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert payload["answer"] == "Answer"
+    assert payload["warnings"] == ["missing evidence"]
+    assert payload["simulation"]["status"] == "not_available"
+
+
+def test_web_adjudication_api_rejects_empty_scenario():
+    app = create_app()
+    response = asyncio.run(
+        call_asgi_app(app, "POST", "/api/adjudicate", {"scenario": " "})
+    )
+
+    assert response["status"] == 400
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert "scenario text is required" in payload["error"]
 
 
 async def call_asgi_app(app, method, path, payload=None):

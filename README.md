@@ -1,5 +1,22 @@
 # Yu-Gi-Oh! Card RAG Agent
 
+## Encoding Policy
+
+This repository uses UTF-8 everywhere. Before running PowerShell commands on Windows, load the project UTF-8 setup:
+
+```powershell
+.\scripts\utf8.ps1
+```
+
+Project rules:
+
+- Text files are UTF-8.
+- Python text I/O must pass `encoding="utf-8"` explicitly.
+- Python processes should run with `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`.
+- PowerShell sessions should set console input/output and `$OutputEncoding` to UTF-8.
+- Git text handling is defined in `.gitattributes`; `scripts/utf8.ps1` also configures local Git UTF-8 display settings.
+- Do not rely on system-default encodings.
+
 本项目用于基于 `cards.cdb` 查询效果相近的游戏王卡片。
 
 ## Setup
@@ -151,6 +168,136 @@ PowerShell 中如果查询文本包含中文弯引号，建议用单引号包裹
 ```powershell
 .\.venv\Scripts\python.exe -m rag_agent query '有没有效果类似“我身作盾”的卡' --db data/cards.cdb --rerank
 ```
+
+## Unified Agent
+
+`agent` 是项目的上层任务入口。它通过中文 Planner prompt 在严格的工具 schema 中选择能力，现有业务实现仍由各自的 service 负责：
+
+- `search_cards` -> `query_service.execute_query()`
+- `translate_text` -> `translation_service.execute_translation()`
+- `adjudicate` -> `adjudication_service.execute_adjudication()` 的 Agent 路径
+- `finish` -> 根据已有工具结果生成最终自然语言回答
+
+单项查卡：
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent agent '查找效果类似“我身作盾”的卡' --semantic
+```
+
+组合任务会在同一个有界 Agent loop 中依次调用多个工具：
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent agent '查找“我身作盾”，并把这句翻译成中文：発動を無効にし破壊する。' `
+  --semantic `
+  --trace `
+  --progress
+```
+
+运行策略由 CLI 或服务端配置控制，Planner 不能自行开启网络、修改数据库路径或传入 API key。`--semantic`、`--rerank` 和 `--llm-rerank` 只影响查卡 specialist。`--max-steps` 限制上层工具轮次，默认 6。
+
+Bot 或其他客户端可以调用统一 API：
+
+```http
+POST /api/agent
+Content-Type: application/json
+
+{
+  "text": "查找我身作盾并翻译它的效果",
+  "semantic": true,
+  "max_steps": 6,
+  "trace": false
+}
+```
+
+响应固定包含 `answer`、`warnings`、`exhausted` 和 `structured.blocks`。每个 block 保留实际调用的工具及其结构化结果；只有请求 `trace: true` 时才返回上层 Agent trace。原有 `/api/query`、`/api/translate` 和 `/api/adjudicate` 接口继续保留。
+
+## AI Ruling Adjudication
+
+The `adjudicate` command answers concrete ruling scenarios with evidence-grounded output. It keeps this workflow separate from similar-card retrieval:
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent adjudicate "Can Alpha Dragon destroy Beta Serpent? Can Beta Serpent apply instead?" --db data/cards.cdb
+```
+
+Optional evidence sources:
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent adjudicate "..." `
+  --db data/cards.cdb `
+  --ygocdb-cache data/ygocdb `
+  --rules-epub ocg-rule-readthedocs-io-zh-cn-latest.epub
+```
+
+Evidence handling:
+
+- `ygocdb` FAQ data is read from cached API responses shaped like `https://ygocdb.com/api/v0/card/{id}?show=all`.
+- `faqs` entries are treated as FAQ ruling evidence and deduplicated by `fid`.
+- `faqs[*].refer` builds a reverse index for related-card rulings. These are labeled as related evidence, not direct rulings.
+- `supplement` entries are lower-priority card supplement evidence, not concrete FAQ rulings.
+- FAQ and supplement HTML is preserved for audit metadata while plain text is used for retrieval and display.
+- The local OCG rules EPUB is parsed through `nav.xhtml` or `toc.ncx` into section evidence ids like `ocgrules:{xhtml_path}#{anchor}`.
+- Rule passages and ygocdb rulings are complementary. The adjudicator attempts both when available.
+
+The first implementation is document-grounded. `--simulate` is wired through the response shape, but without a concrete `ygoenv` adapter it reports simulator availability/encoding warnings instead of blocking the answer.
+
+LangGraph adjudication agent:
+
+```powershell
+.\.venv\Scripts\python.exe -m rag_agent adjudicate "..." `
+  --db data/cards.cdb `
+  --ygocdb-cache data/ygocdb `
+  --rules-epub ocg-rule-readthedocs-io-zh-cn-latest.epub `
+  --agent `
+  --trace
+```
+
+- `--agent` enables the LangGraph path. The default path remains the original one-shot adjudicator.
+- The agent keeps explicit state for extracted scenario data, fuzzy card candidates, resolved cards, evidence, coverage, warnings, and final JSON.
+- Card resolution tries exact name matching, normalized matching such as `破械冥官·篁` -> `破械冥官 篁`, and sparse card retrieval over card name, text, metadata, and effect tags.
+- Evidence tools collect card effects, direct ygocdb FAQ, refer-based related FAQ, supplements, analogous FAQ, and OCG rules passages.
+- Coverage checks look for unresolved or ambiguous cards, missing evidence, and hypothetical-branch gaps before final answering. Retrieval is retried up to `RAG_ADJUDICATION_AGENT_MAX_ITERATIONS`.
+- `--trace` includes compact node/tool trace data in the JSON output. Without it, the service can still return `agent_coverage` while omitting trace by default.
+- Current limitation: ygoenv simulation is not implemented in the agent path yet; the agent is retrieval and evidence grounded.
+
+Agentic card resolution:
+
+- The adjudication agent resolves card names before ruling retrieval: LLM extraction of possible card-name strings, local card candidate retrieval, rule-based high-confidence selection, optional constrained LLM selection for ambiguous candidates, then bounded targeted retries.
+- Local card data is the only source of card ids. LLM extraction output is accepted only as strings/context, and LLM selection can choose only ids already returned by local retrieval.
+- Malformed LLM extraction or selection output falls back to deterministic extraction/selection and is recorded in the card-resolution trace.
+- Ruling FAQ/rules retrieval consumes only the final resolved card ids after retries; unresolved and ambiguous mentions remain visible in coverage and trace summaries.
+- Recommended defaults are `RAG_ADJUDICATION_CARD_RESOLUTION_TOP_K=5`, `RAG_ADJUDICATION_CARD_RESOLUTION_RETRY_LIMIT=1`, `RAG_ADJUDICATION_LLM_CARD_EXTRACTION=1`, and `RAG_ADJUDICATION_LLM_CARD_SELECTION=0`. Enable LLM selection only when the card database retrieval candidates are already strong enough to constrain the choice.
+
+Persistent ruling indexes:
+
+```powershell
+# 1. Download or refresh local ygocdb payloads first.
+.\.venv\Scripts\python.exe -m rag_agent download-rulings `
+  --db data/cards.cdb `
+  --out data/ygocdb
+
+# 2. Build FAQ/supplement and OCG rules vector indexes from local files.
+.\.venv\Scripts\python.exe -m rag_agent build-ruling-index `
+  --db data/cards.cdb `
+  --ygocdb-cache data/ygocdb `
+  --rules-epub ocg-rule-readthedocs-io-zh-cn-latest.epub `
+  --reset
+
+# 3. Inspect index manifests and collection counts.
+.\.venv\Scripts\python.exe -m rag_agent inspect-ruling-index --json
+
+# 4. Test ruling evidence retrieval directly.
+.\.venv\Scripts\python.exe -m rag_agent query-rulings "target was not destroyed later special summon" `
+  --db data/cards.cdb `
+  --semantic `
+  --json
+```
+
+- `build-ruling-index --faq-only` updates only ygocdb FAQ/supplement evidence.
+- `build-ruling-index --rules-only` updates only OCG rules evidence.
+- `query-rulings --rerank` applies the local bge reranker to retrieved evidence.
+- `query-rulings --llm-rerank` applies DeepSeek LLM judge rerank and requires `DEEPSEEK_API_KEY`.
+- If a persistent ruling index is missing or stale, adjudication keeps the existing runtime fallback from `data/ygocdb` and the EPUB, with warnings/trace metadata where available.
+- Persistent indexes are derived artifacts. The raw sources remain `data/ygocdb/*.json`, `data/cards.cdb`, and the configured OCG rules EPUB.
 
 ## Web UI
 
@@ -325,6 +472,29 @@ structured.blocks[*].text
 ```
 
 DeepSeek credentials are still read from the server environment. Do not send API keys in the request body.
+
+## Adjudication API / Bot Integration
+
+The Web service also exposes adjudication:
+
+```text
+POST http://127.0.0.1:7860/api/adjudicate
+```
+
+Request example:
+
+```json
+{
+  "scenario": "Can Alpha Dragon destroy Beta Serpent? Can Beta Serpent apply instead?",
+  "db_path": "data/cards.cdb",
+  "ygocdb_cache_path": "data/ygocdb",
+  "rules_epub_path": "ocg-rule-readthedocs-io-zh-cn-latest.epub",
+  "llm": false,
+  "simulate": false
+}
+```
+
+Response fields include `scenario`, `resolved_cards`, `evidence`, `reasoning`, `answer`, `confidence`, `warnings`, and `simulation`. Evidence items are labeled by kind and relationship so callers can distinguish direct ygocdb FAQ rulings, `refer` related rulings, analogous rulings, supplement evidence, card text, rule passages, and simulation observations.
 
 ## Translate CLI
 

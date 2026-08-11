@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Any
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Mapping
 
 
 TYPE_MONSTER = 0x1
@@ -107,6 +110,84 @@ LINK_MARKERS = {
     0x002: "bottom",
     0x004: "bottom_right",
 }
+
+EFFECT_CATEGORY_NAMES = {
+    0x1: "spell_trap_destroy",
+    0x2: "monster_destroy",
+    0x4: "banish",
+    0x8: "to_grave",
+    0x10: "to_hand",
+    0x20: "to_deck",
+    0x40: "hand_destroy",
+    0x80: "deck_destroy",
+    0x100: "draw",
+    0x200: "search",
+    0x400: "card_recover",
+    0x800: "battle_position",
+    0x1000: "control",
+    0x2000: "atk_def_change",
+    0x4000: "piercing_damage",
+    0x8000: "multi_attack",
+    0x10000: "attack_limit",
+    0x20000: "direct_attack",
+    0x40000: "special_summon",
+    0x80000: "token",
+    0x100000: "race_related",
+    0x200000: "attribute_related",
+    0x400000: "lp_damage",
+    0x800000: "lp_recover",
+    0x1000000: "destruction_protection",
+    0x2000000: "effect_protection",
+    0x4000000: "counter",
+    0x8000000: "luck",
+    0x10000000: "fusion_related",
+    0x20000000: "synchro_related",
+    0x40000000: "xyz_related",
+    0x80000000: "negate_effect",
+}
+
+DEFAULT_EFFECT_CATEGORY_LABELS = {
+    0x1: "魔陷破坏",
+    0x2: "怪兽破坏",
+    0x4: "除外",
+    0x8: "送去墓地",
+    0x10: "返回手卡",
+    0x20: "返回卡组",
+    0x40: "手卡破坏",
+    0x80: "卡组破坏",
+    0x100: "抽卡辅助",
+    0x200: "卡组检索",
+    0x400: "卡片回收",
+    0x800: "表示形式",
+    0x1000: "控制权",
+    0x2000: "攻守变化",
+    0x4000: "穿刺伤害",
+    0x8000: "多次攻击",
+    0x10000: "攻击限制",
+    0x20000: "直接攻击",
+    0x40000: "特殊召唤",
+    0x80000: "衍生物",
+    0x100000: "种族相关",
+    0x200000: "属性相关",
+    0x400000: "LP伤害",
+    0x800000: "LP回复",
+    0x1000000: "破坏耐性",
+    0x2000000: "效果耐性",
+    0x4000000: "指示物",
+    0x8000000: "幸运",
+    0x10000000: "融合相关",
+    0x20000000: "同调相关",
+    0x40000000: "超量相关",
+    0x80000000: "效果无效",
+}
+
+_STRINGS_CONF_ENV_VARS = ("RAG_STRINGS_CONF", "YGOPRO_STRINGS_CONF")
+_DEFAULT_STRINGS_CONF_PATHS = (
+    Path("data/strings.conf"),
+    Path("strings.conf"),
+    Path("assets/strings.conf"),
+    Path("asset/strings.conf"),
+)
 
 
 @dataclass(frozen=True)
@@ -241,6 +322,90 @@ def decode_card_structure(
             else _decode_stat_value(defense_value)
         ),
     )
+
+
+def decode_effect_category_keys(category_value: int | None) -> tuple[str, ...]:
+    category_bits = int(category_value or 0)
+    return tuple(
+        name
+        for bit, name in EFFECT_CATEGORY_NAMES.items()
+        if category_bits & bit
+    )
+
+
+def decode_effect_category_labels(
+    category_value: int | None,
+    labels_by_bit: Mapping[int, str] | None = None,
+) -> tuple[str, ...]:
+    labels = labels_by_bit or get_effect_category_labels()
+    category_bits = int(category_value or 0)
+    return tuple(
+        label
+        for bit, label in _ordered_effect_category_labels(labels).items()
+        if category_bits & bit and label
+    )
+
+
+def decode_effect_categories(category_value: int | None) -> tuple[str, ...]:
+    return decode_effect_category_labels(category_value)
+
+
+def load_effect_category_labels_from_strings_conf(path: Path | str) -> dict[int, str]:
+    labels: dict[int, str] = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        parts = line.strip().split(maxsplit=2)
+        if len(parts) < 3 or parts[0] != "!system":
+            continue
+        try:
+            system_id = int(parts[1])
+        except ValueError:
+            continue
+        offset = system_id - 1100
+        if 0 <= offset < len(EFFECT_CATEGORY_NAMES):
+            labels[1 << offset] = parts[2].strip()
+    return labels
+
+
+@lru_cache(maxsize=1)
+def get_effect_category_labels() -> dict[int, str]:
+    strings_conf = find_strings_conf()
+    if strings_conf is None:
+        return dict(DEFAULT_EFFECT_CATEGORY_LABELS)
+    labels = load_effect_category_labels_from_strings_conf(strings_conf)
+    return dict(DEFAULT_EFFECT_CATEGORY_LABELS) | labels
+
+
+def find_strings_conf() -> Path | None:
+    candidates: list[Path] = []
+    for env_var in _STRINGS_CONF_ENV_VARS:
+        value = os.environ.get(env_var)
+        if value:
+            candidates.append(Path(value))
+    candidates.extend(_DEFAULT_STRINGS_CONF_PATHS)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _ordered_effect_category_labels(labels: Mapping[int, str]) -> dict[int, str]:
+    return {
+        bit: labels[bit]
+        for bit in EFFECT_CATEGORY_NAMES
+        if bit in labels
+    }
+
+
+def effect_categories_to_metadata(category_value: int | None) -> dict[str, Any]:
+    keys = decode_effect_category_keys(category_value)
+    labels = decode_effect_category_labels(category_value)
+    metadata: dict[str, Any] = {
+        "effect_category_keys": ",".join(keys) if keys else None,
+        "effect_category_names": ",".join(labels) if labels else None,
+    }
+    for key in EFFECT_CATEGORY_NAMES.values():
+        metadata[f"has_effect_{key}"] = key in keys
+    return metadata
 
 
 def _decode_level_value(value: int | None) -> int | None:

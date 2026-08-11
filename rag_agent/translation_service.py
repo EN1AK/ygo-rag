@@ -46,14 +46,14 @@ def build_translation_prompt(request: TranslationRequest) -> str:
     normalized = normalize_translation_request(request)
     return "\n".join(
         [
-            "You are a precise translation engine.",
-            f"Source language: {normalized.source_lang}",
-            f"Target language: {normalized.target_lang}",
+            "你是一个精确的翻译引擎。",
+            f"源语言：{normalized.source_lang}",
+            f"目标语言：{normalized.target_lang}",
             "",
-            "Translate only the text between <text> and </text>.",
-            "Preserve the original meaning and formatting where practical.",
-            "For game or trading-card text, keep terminology consistent and concise.",
-            "Do not add explanations, notes, markdown fences, or commentary.",
+            "只翻译 <text> 和 </text> 之间的文本。",
+            "在可行时保留原文含义和格式。",
+            "如果是游戏或集换式卡牌文本，术语要保持一致且表达简洁。",
+            "不要添加解释、注释、Markdown 代码块或额外评论。",
             "",
             "<text>",
             normalized.text,
