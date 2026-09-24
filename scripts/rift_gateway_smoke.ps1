@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$base = 'http://127.0.0.1:7860'  # kami-man 将 RIFT_RAG_API_URL 指向 $base/api/rift/query
+$base = 'http://127.0.0.1:7860'  # kami-man 将 RIFT_RAG_BASE_URL 指向 $base/api/rift（拼 {base}/api/query）
 
 function Post-Query($payload, $outFile) {
   $body = [System.Text.Encoding]::UTF8.GetBytes(($payload | ConvertTo-Json -Compress))

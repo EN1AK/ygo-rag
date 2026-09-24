@@ -21,4 +21,4 @@
 ## 5. Verification
 
 - [x] 5.1 Run the full suite `.\.venv\Scripts\python.exe -m pytest` and `openspec validate add-riftbound-rules-gateway --strict`; confirm all pass with no regressions.（结果：351 passed；validate --strict 通过）
-- [x] 5.2 Live smoke（存档于 `scripts/rift_gateway_smoke_*.out.json`）：riftsim `rag_server.py --preload` 于 7862 + ygo-rag `web` 于 7860，三场景验证通过——200（`{"query": "反制堆叠有上限吗"}`，v2 字段 mode/exhausted/coverage/resolved_cards 原样透传）、400（空 query，`{"error": "query must be a non-empty string."}`）、502（停掉上游后返回 `upstream unavailable` + 连接拒绝详情）。kami-man 接入方式：将环境变量 `RIFT_RAG_API_URL` 设置为 `http://127.0.0.1:7860/api/rift/query`（客户端使用完整 URL 环境变量，零代码改动；本条修正了任务原文中关于 URL 拼接的错误表述）。
+- [x] 5.2 Live smoke（存档于 `scripts/rift_gateway_smoke_*.out.json`）：riftsim `rag_server.py --preload` 于 7862 + ygo-rag `web` 于 7860，三场景验证通过——200（`{"query": "反制堆叠有上限吗"}`，v2 字段 mode/exhausted/coverage/resolved_cards 原样透传）、400（空 query，`{"error": "query must be a non-empty string."}`）、502（停掉上游后返回 `upstream unavailable` + 连接拒绝详情）。kami-man 接入方式：设 `RIFT_RAG_BASE_URL=http://127.0.0.1:7860/api/rift`（客户端拼 `{base}/api/query`，零代码改动；网关另提供兼容消费路径 `/api/rift/api/query`）。生产环境指向7861 网关。
