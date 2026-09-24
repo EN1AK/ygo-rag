@@ -99,10 +99,9 @@ Credentials are not read from files in the repository and must not be committed.
 - Use `pathlib.Path` for filesystem paths.
 - Preserve original card effect text in outputs where possible.
 - Optional heavy dependencies should be loaded only when the related feature is used.
-- Run tests before reporting implementation complete:
+- Run tests before reporting implementation complete (plain pytest, no plugin guards):
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
 .\.venv\Scripts\python.exe -m pytest
 ```
 

@@ -52,6 +52,8 @@ class Settings:
     ruling_fused_top_k: int
     ruling_final_top_k: int
     ruling_rerank_provider: str
+    riftbound_rag_base_url: str
+    riftbound_rag_timeout_seconds: float
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
@@ -173,4 +175,21 @@ class Settings:
             ruling_fused_top_k=int(values.get("RAG_RULING_FUSED_TOP_K", "20")),
             ruling_final_top_k=int(values.get("RAG_RULING_FINAL_TOP_K", "10")),
             ruling_rerank_provider=values.get("RAG_RULING_RERANK_PROVIDER", "none"),
+            riftbound_rag_base_url=values.get(
+                "RIFTBOUND_RAG_BASE_URL", "http://127.0.0.1:7862"
+            ),
+            riftbound_rag_timeout_seconds=_positive_float(
+                values.get("RIFTBOUND_RAG_TIMEOUT_SECONDS"), 200.0
+            ),
         )
+
+
+def _positive_float(value: str | None, default: float) -> float:
+    """非数字/非正数的环境变量值回退到默认浮点数。"""
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default

@@ -28,11 +28,29 @@ from rag_agent.assistant_agent import (
     AssistantAgentResponse,
     execute_assistant_agent,
 )
+from rag_agent.rift_gateway import (
+    CATEGORY_TIMEOUT,
+    CATEGORY_UNAVAILABLE,
+    CATEGORY_UPSTREAM,
+    CATEGORY_VALIDATION,
+    RiftGatewayError,
+    RiftQueryRequest,
+    execute_rift_query,
+    parse_rift_gateway_request,
+)
 
 QueryHandler = Callable[[QueryRequest], QueryResponse]
 TranslationHandler = Callable[[TranslationRequest], TranslationResponse]
 AdjudicationHandler = Callable[[AdjudicationRequest], AdjudicationResponse]
 AssistantHandler = Callable[[AssistantAgentRequest], AssistantAgentResponse]
+RiftHandler = Callable[[RiftQueryRequest], Mapping[str, Any]]
+
+_RIFT_ERROR_STATUS = {
+    CATEGORY_VALIDATION: 400,
+    CATEGORY_UNAVAILABLE: 502,
+    CATEGORY_TIMEOUT: 504,
+    CATEGORY_UPSTREAM: 502,
+}
 
 
 def create_app(
@@ -40,11 +58,13 @@ def create_app(
     translation_handler: TranslationHandler | None = None,
     adjudication_handler: AdjudicationHandler | None = None,
     assistant_handler: AssistantHandler | None = None,
+    rift_handler: RiftHandler | None = None,
 ):
     handler = query_handler or _default_query_handler
     translate = translation_handler or _default_translation_handler
     adjudicate = adjudication_handler or _default_adjudication_handler
     run_assistant = assistant_handler or _default_assistant_handler
+    run_rift = rift_handler or _default_rift_handler
 
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
@@ -101,6 +121,21 @@ def create_app(
                         include_trace=_as_bool(payload.get("trace", False))
                     ),
                 )
+                return
+            # /api/rift/query 为规整路由；/api/rift/api/query 为 kami-man
+            # base URL 拼接（{base}/api/query）下的消费路径，二者同 handler。
+            if method == "POST" and path in ("/api/rift/query", "/api/rift/api/query"):
+                payload = await _read_json_body(receive)
+                try:
+                    response = run_rift(parse_rift_gateway_request(payload))
+                except RiftGatewayError as exc:
+                    await _send_response(
+                        send,
+                        _RIFT_ERROR_STATUS.get(exc.category, 500),
+                        {"error": str(exc)},
+                    )
+                    return
+                await _send_response(send, 200, response)
                 return
             await _send_response(send, 404, {"error": "Not found."})
         except ValueError as exc:
@@ -495,6 +530,10 @@ def _default_adjudication_handler(request: AdjudicationRequest) -> AdjudicationR
 
 def _default_assistant_handler(request: AssistantAgentRequest) -> AssistantAgentResponse:
     return execute_assistant_agent(request, Settings.from_env())
+
+
+def _default_rift_handler(request: RiftQueryRequest) -> Mapping[str, Any]:
+    return execute_rift_query(request, Settings.from_env())
 
 
 def _optional_path(value: Any) -> Path | None:

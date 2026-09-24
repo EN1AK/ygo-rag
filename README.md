@@ -529,9 +529,8 @@ By default this translates to Chinese. Explicit language direction is supported:
 
 ## Test
 
-当前全局 Anaconda 环境可能自动加载不兼容 pytest 插件，建议禁用插件自动加载：
+直接运行 pytest 即可，无需额外的插件禁用等防护：
 
 ```powershell
-$env:PYTEST_DISABLE_PLUGIN_AUTOLOAD='1'
-python -m pytest
+.\.venv\Scripts\python.exe -m pytest
 ```

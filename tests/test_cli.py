@@ -71,6 +71,7 @@ def test_cli_help_lists_commands():
     assert "translate" in result.stdout
     assert "adjudicate" in result.stdout
     assert "agent" in result.stdout
+    assert "rift-query" in result.stdout
     assert "web" in result.stdout
 
 
@@ -115,6 +116,75 @@ def test_cli_agent_help_lists_unified_tool_options():
     assert "--max-steps" in result.stdout
     assert "--trace" in result.stdout
     assert "--progress" in result.stdout
+
+
+def test_cli_rift_query_help_lists_options():
+    result = run_cli("rift-query", "--help")
+
+    assert result.returncode == 0
+    assert "--top-k" in result.stdout
+    assert "--mode" in result.stdout
+    assert "--trace" in result.stdout
+
+
+def test_cli_rift_query_success_output(monkeypatch, capsys):
+    captured = {}
+
+    def fake_execute(request, settings, transport=None):
+        captured["request"] = request
+        return {
+            "answer": "连锁结算无次数上限",
+            "warnings": ["部分证据未覆盖"],
+            "sources": [
+                {"rule_id": "R-CR-716.1", "topic": "连锁"},
+                {"rule_id": "R-CR-716.10", "topic": "连锁"},
+            ],
+        }
+
+    monkeypatch.setattr("rag_agent.rift_gateway.execute_rift_query", fake_execute)
+
+    exit_code = cli.main(
+        ["rift-query", "反制堆叠有上限吗", "--top-k", "4",
+         "--mode", "agent", "--trace"]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr()
+    assert "连锁结算无次数上限" in output.out
+    assert "R-CR-716.1" in output.out and "R-CR-716.10" in output.out
+    assert "warning: 部分证据未覆盖" in output.err
+    request = captured["request"]
+    assert request.top_k == 4
+    assert request.mode == "agent"
+    assert request.trace is True
+
+
+def test_cli_rift_query_defaults_omit_mode_and_trace(monkeypatch):
+    captured = {}
+
+    def fake_execute(request, settings, transport=None):
+        captured["request"] = request
+        return {"answer": "a", "warnings": [], "sources": []}
+
+    monkeypatch.setattr("rag_agent.rift_gateway.execute_rift_query", fake_execute)
+
+    assert cli.main(["rift-query", "什么是连锁"]) == 0
+    request = captured["request"]
+    assert request.top_k == 6
+    assert request.mode is None
+    assert request.trace is None
+
+
+def test_cli_rift_query_gateway_failure_exits_1(monkeypatch, capsys):
+    from rag_agent.rift_gateway import RiftGatewayError
+
+    def fake_execute(request, settings, transport=None):
+        raise RiftGatewayError("unavailable", "upstream unavailable: refused")
+
+    monkeypatch.setattr("rag_agent.rift_gateway.execute_rift_query", fake_execute)
+
+    assert cli.main(["rift-query", "什么是连锁"]) == 1
+    assert "error: upstream unavailable: refused" in capsys.readouterr().err
 
 
 def test_cli_agent_uses_unified_service(monkeypatch, capsys):

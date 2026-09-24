@@ -309,6 +309,121 @@ def test_web_adjudication_api_rejects_empty_scenario():
     assert "scenario text is required" in payload["error"]
 
 
+def test_rift_route_returns_pass_through_response():
+    def fake_rift_handler(request):
+        assert request.query == "反制堆叠有上限吗"
+        assert request.top_k == 6
+        assert request.mode is None
+        assert request.trace is None
+        return {
+            "answer": "连锁有上限 [R-CR-716.1]",
+            "warnings": [],
+            "sources": [{"rule_id": "R-CR-716.1", "topic": "连锁"}],
+            "mode": "agent",
+            "exhausted": False,
+            "coverage": {"unresolved_mentions": [], "ambiguous_mentions": []},
+        }
+
+    app = create_app(rift_handler=fake_rift_handler)
+    response = asyncio.run(
+        call_asgi_app(
+            app, "POST", "/api/rift/query", {"query": "反制堆叠有上限吗"}
+        )
+    )
+
+    assert response["status"] == 200
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert payload["answer"] == "连锁有上限 [R-CR-716.1]"
+    assert payload["mode"] == "agent"
+    assert payload["coverage"] == {
+        "unresolved_mentions": [],
+        "ambiguous_mentions": [],
+    }
+
+
+def test_rift_route_forwards_explicit_options_to_handler():
+    seen = {}
+
+    def fake_rift_handler(request):
+        seen["mode"] = request.mode
+        seen["trace"] = request.trace
+        seen["top_k"] = request.top_k
+        return {"answer": "a", "warnings": [], "sources": []}
+
+    app = create_app(rift_handler=fake_rift_handler)
+    response = asyncio.run(
+        call_asgi_app(
+            app,
+            "POST",
+            "/api/rift/query",
+            {"query": "q", "top_k": 9, "mode": "oneshot", "trace": True},
+        )
+    )
+
+    assert response["status"] == 200
+    assert seen == {"mode": "oneshot", "trace": True, "top_k": 9}
+
+
+def test_rift_route_rejects_invalid_body_with_400():
+    def fake_rift_handler(request):
+        raise AssertionError("handler must not run on validation failure")
+
+    app = create_app(rift_handler=fake_rift_handler)
+    response = asyncio.run(
+        call_asgi_app(app, "POST", "/api/rift/query", {"query": " "})
+    )
+
+    assert response["status"] == 400
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert "query" in payload["error"]
+
+
+def test_rift_route_maps_gateway_error_categories():
+    from rag_agent.rift_gateway import RiftGatewayError
+
+    cases = [
+        ("unavailable", 502),
+        ("timeout", 504),
+        ("upstream", 502),
+    ]
+    for category, expected_status in cases:
+        def fake_rift_handler(request, category=category):
+            raise RiftGatewayError(category, f"boom {category}")
+
+        app = create_app(rift_handler=fake_rift_handler)
+        response = asyncio.run(
+            call_asgi_app(app, "POST", "/api/rift/query", {"query": "q"})
+        )
+
+        assert response["status"] == expected_status, category
+        payload = json.loads(response["body"].decode("utf-8"))
+        assert payload["error"] == f"boom {category}"
+
+
+def test_rift_alias_route_for_kami_man_base_composition():
+    # kami-man 以 {base}/api/query 拼接：base=http://127.0.0.1:7860/api/rift
+    # 时拼出 /api/rift/api/query，应与规整路由同 handler。
+    app = create_app(
+        rift_handler=lambda request: {"answer": "a", "warnings": [], "sources": []}
+    )
+    response = asyncio.run(
+        call_asgi_app(app, "POST", "/api/rift/api/query", {"query": "q"})
+    )
+
+    assert response["status"] == 200
+    payload = json.loads(response["body"].decode("utf-8"))
+    assert payload["answer"] == "a"
+
+
+def test_unknown_rift_path_still_404():
+    app = create_app(rift_handler=lambda request: {})
+    response = asyncio.run(
+        call_asgi_app(app, "POST", "/api/rift/anything", {"query": "q"})
+    )
+
+    assert response["status"] == 404
+
+
 async def call_asgi_app(app, method, path, payload=None):
     body = json.dumps(payload or {}).encode("utf-8")
     messages = []

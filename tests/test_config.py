@@ -15,6 +15,8 @@ def test_settings_defaults_keep_runtime_artifacts_under_data():
     assert settings.llm_rerank_max_candidates == 20
     assert settings.deepseek_timeout_seconds == 60.0
     assert settings.deepseek_api_key is None
+    assert settings.riftbound_rag_base_url == "http://127.0.0.1:7862"
+    assert settings.riftbound_rag_timeout_seconds == 200.0
     assert settings.ruling_faq_index_path.as_posix().endswith("data/ruling_faq_chroma")
     assert settings.ruling_rules_index_path.as_posix().endswith("data/ruling_rules_chroma")
     assert settings.ruling_faq_collection_name == "ruling_faqs"
@@ -126,3 +128,22 @@ def test_settings_reads_adjudication_agent_budget_env_values():
     assert settings.adjudication_agent_retrieval_limit == 4
     assert settings.adjudication_agent_critique_limit == 3
     assert settings.adjudication_agent_submit_limit == 2
+
+
+def test_settings_reads_riftbound_gateway_env_values():
+    settings = Settings.from_env(
+        {
+            "RIFTBOUND_RAG_BASE_URL": "http://192.168.0.3:7862",
+            "RIFTBOUND_RAG_TIMEOUT_SECONDS": "120.5",
+        }
+    )
+
+    assert settings.riftbound_rag_base_url == "http://192.168.0.3:7862"
+    assert settings.riftbound_rag_timeout_seconds == 120.5
+
+
+def test_settings_invalid_riftbound_timeout_falls_back_to_default():
+    for bad in ("abc", "0", "-5", ""):
+        settings = Settings.from_env({"RIFTBOUND_RAG_TIMEOUT_SECONDS": bad})
+
+        assert settings.riftbound_rag_timeout_seconds == 200.0

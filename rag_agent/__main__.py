@@ -560,6 +560,21 @@ def run_assistant_agent(
     return 0
 
 
+def run_rift_query(
+    question: str, top_k: int, mode: str | None, trace: bool | None
+) -> int:
+    from rag_agent.rift_gateway import RiftQueryRequest, execute_rift_query
+
+    request = RiftQueryRequest(query=question, top_k=top_k, mode=mode, trace=trace)
+    response = execute_rift_query(request, Settings.from_env())
+    print(response["answer"])
+    for warning in response["warnings"]:
+        print(f"warning: {warning}", file=sys.stderr)
+    for source in response["sources"]:
+        print(f"{source['rule_id']}: {source.get('topic', '')}")
+    return 0
+
+
 def run_web(host: str, port: int) -> int:
     try:
         import uvicorn
@@ -800,6 +815,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="both",
     )
 
+    rift = subparsers.add_parser(
+        "rift-query",
+        help="query the Riftbound rules RAG via the local gateway",
+    )
+    rift.add_argument("question")
+    rift.add_argument("--top-k", type=int, default=6)
+    rift.add_argument("--mode", choices=("agent", "oneshot"), default=None)
+    rift.add_argument("--trace", action="store_true")
+
     web = subparsers.add_parser("web", help="start local web UI")
     web.add_argument("--host", default="127.0.0.1")
     web.add_argument("--port", type=int, default=7860)
@@ -912,6 +936,13 @@ def main(argv: list[str] | None = None) -> int:
                 include_trace=args.trace,
                 show_progress=args.progress,
                 output_format=args.output_format,
+            )
+        if args.command == "rift-query":
+            return run_rift_query(
+                args.question,
+                args.top_k,
+                args.mode,
+                True if args.trace else None,
             )
         if args.command == "web":
             return run_web(args.host, args.port)
