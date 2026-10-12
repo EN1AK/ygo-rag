@@ -172,10 +172,8 @@ def build_persistent_ruling_retrievers(
             show_progress=False,
         )
         if settings.embedding_device.startswith("cuda")
-        else BgeM3Embeddings(
-            settings.embedding_model,
-            device=settings.embedding_device,
-            show_progress=False,
+        else __import__("rag_agent.shared_embeddings",fromlist=["get_embeddings"]).get_embeddings(
+            settings.embedding_model,settings.embedding_device
         )
     )
     retrievers: list[PersistentRulingRetriever] = []

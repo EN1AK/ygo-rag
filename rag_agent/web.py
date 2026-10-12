@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -60,6 +61,8 @@ def create_app(
     assistant_handler: AssistantHandler | None = None,
     rift_handler: RiftHandler | None = None,
 ):
+    from rag_agent.http_runtime import HttpRuntime
+    runtime = HttpRuntime()
     handler = query_handler or _default_query_handler
     translate = translation_handler or _default_translation_handler
     adjudicate = adjudication_handler or _default_adjudication_handler
@@ -77,13 +80,16 @@ def create_app(
         method = scope.get("method", "GET").upper()
         path = scope.get("path", "/")
         try:
+            if method == "GET" and path == "/healthz":
+                await _send_response(send,200,{"ok":True,"service":"unified-agent","domains":["ygo","riftbound"],"sessions":True})
+                return
             if method == "GET" and path == "/":
                 await _send_html(send, render_index_html())
                 return
             if method == "POST" and path == "/api/query":
                 payload = await _read_json_body(receive)
                 request = parse_query_request(payload)
-                response = handler(request)
+                response = await runtime.call(handler, request)
                 await _send_response(
                     send,
                     200,
@@ -101,19 +107,19 @@ def create_app(
             if method == "POST" and path == "/api/translate":
                 payload = await _read_json_body(receive)
                 request = parse_translation_request(payload)
-                response = translate(request)
+                response = await runtime.call(translate, request)
                 await _send_response(send, 200, translation_response_to_dict(response))
                 return
             if method == "POST" and path == "/api/adjudicate":
                 payload = await _read_json_body(receive)
                 request = parse_adjudication_request(payload)
-                response = adjudicate(request)
+                response = await runtime.call(adjudicate, request)
                 await _send_response(send, 200, adjudication_response_to_dict(response))
                 return
             if method == "POST" and path == "/api/agent":
                 payload = await _read_json_body(receive)
                 request = parse_assistant_request(payload)
-                response = run_assistant(request)
+                response = await runtime.call(run_assistant, request)
                 await _send_response(
                     send,
                     200,
@@ -127,7 +133,7 @@ def create_app(
             if method == "POST" and path in ("/api/rift/query", "/api/rift/api/query"):
                 payload = await _read_json_body(receive)
                 try:
-                    response = run_rift(parse_rift_gateway_request(payload))
+                    response = await runtime.call(run_rift, parse_rift_gateway_request(payload))
                 except RiftGatewayError as exc:
                     await _send_response(
                         send,
@@ -138,6 +144,8 @@ def create_app(
                 await _send_response(send, 200, response)
                 return
             await _send_response(send, 404, {"error": "Not found."})
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            await _send_response(send, 504, {"error": "请求超时或服务繁忙，请稍后再试。"})
         except ValueError as exc:
             await _send_response(send, 400, {"error": str(exc)})
         except Exception as exc:
@@ -240,6 +248,8 @@ def parse_assistant_request(payload: Mapping[str, Any]) -> AssistantAgentRequest
     rerank_provider = _parse_rerank_provider(payload)
     return AssistantAgentRequest(
         text=text,
+        session_id=_session_id(payload.get("session_id")),
+        quoted_reply=str(payload.get("quoted_reply") or "")[:4000],
         db_path=Path(str(payload.get("db_path") or settings.cards_db_path).strip()),
         semantic=_as_bool(payload.get("semantic", False)),
         rerank=_as_bool(payload.get("rerank", False)),
@@ -529,7 +539,8 @@ def _default_adjudication_handler(request: AdjudicationRequest) -> AdjudicationR
 
 
 def _default_assistant_handler(request: AssistantAgentRequest) -> AssistantAgentResponse:
-    return execute_assistant_agent(request, Settings.from_env())
+    from rag_agent.sessions import execute_session
+    return execute_session(request, Settings.from_env())
 
 
 def _default_rift_handler(request: RiftQueryRequest) -> Mapping[str, Any]:
@@ -625,3 +636,10 @@ def _parse_rerank_provider(payload: Mapping[str, Any]) -> str | None:
     if _as_bool(payload.get("llm_rerank", False)):
         return "llm"
     return None
+
+
+def _session_id(value):
+    if value is None:return None
+    if not isinstance(value,str) or not value or len(value)>160:
+        raise ValueError("Invalid session_id")
+    return value

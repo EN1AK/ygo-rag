@@ -41,7 +41,7 @@ class QueryResponse:
 
 
 def execute_query(request: QueryRequest, settings: Settings) -> QueryResponse:
-    cards = load_cards(request.db_path)
+    cards = _cached_cards(str(request.db_path.resolve()), request.db_path.stat().st_mtime_ns)
     warnings: list[str] = []
 
     agent = build_agent(
@@ -85,10 +85,8 @@ def build_agent(
 ) -> CardRagAgent:
     dense_retriever = None
     if semantic:
-        embeddings = BgeM3Embeddings(
-            settings.embedding_model,
-            device=settings.embedding_device,
-        )
+        from rag_agent.shared_embeddings import get_embeddings
+        embeddings = get_embeddings(settings.embedding_model, settings.embedding_device)
         candidate_dense_retriever = ChromaVectorStore(
             ChromaConfig(settings.chroma_persist_dir),
             embeddings,
@@ -280,3 +278,9 @@ def truncate_text(text: str, max_chars: int | None) -> str:
     if max_chars == 1:
         return "…"
     return text[: max_chars - 1].rstrip() + "…"
+
+
+from functools import lru_cache
+@lru_cache(maxsize=4)
+def _cached_cards(path,mtime):
+    return load_cards(Path(path))

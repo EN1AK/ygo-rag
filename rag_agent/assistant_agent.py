@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, Protocol
@@ -30,6 +31,9 @@ AssistantToolName = Literal[
     "translate_text",
     "adjudicate",
     "finish",
+    "rift_search_cards",
+    "rift_rules",
+    "clarify",
 ]
 
 
@@ -64,6 +68,15 @@ ASSISTANT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+ASSISTANT_TOOL_SCHEMAS["search_cards"]["description"]="游戏王查卡、卡片效果相似检索。仅用于游戏王。"
+ASSISTANT_TOOL_SCHEMAS["finish"]={"description":"直接回答日常聊天，或汇总已完成的工具结果。","arguments":{"answer":"必填；日常聊天可直接作答，卡片效果和裁定只能依据工具结果。"}}
+ASSISTANT_TOOL_SCHEMAS.update({
+    "rift_search_cards":{"description":"符文战场查卡：中文名、英文名、副标题、编号和模糊卡名；不支持按效果语义找相似卡。", "arguments":{"query":"必填卡名或编号","top_k":"1-20，默认10"}},
+    "rift_rules":{"description":"符文战场规则、裁定、对局互动；返回可验证依据及未解决卡名。", "arguments":{"query":"必填，保留完整场景与问题","top_k":"1-20，默认6"}},
+    "clarify":{"description":"游戏或卡名有歧义时询问用户，不擅自选择。","arguments":{"answer":"必填，简短澄清问题"}}
+})
+
+
 class Llm(Protocol):
     def invoke(self, prompt: str):
         ...
@@ -94,6 +107,9 @@ class AssistantAgentRequest:
     rules_epub_path: Path | None = None
     include_specialist_trace: bool = False
     structured_max_block_chars: int | None = None
+    session_id: str | None = None
+    quoted_reply: str = ""
+    history: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -197,6 +213,11 @@ class ProjectAssistantToolRunner:
         arguments: Mapping[str, Any],
         request: AssistantAgentRequest,
     ) -> AssistantToolObservation:
+        if tool in {"rift_search_cards", "rift_rules"}:
+            from rag_agent.rift_tools import search_cards,query_rules
+            query=str(arguments["query"])
+            data=search_cards(query,int(arguments.get("top_k",10))) if tool=="rift_search_cards" else query_rules(query,int(arguments.get("top_k",6)),request.include_specialist_trace)
+            return AssistantToolObservation(tool=tool,ok=True,summary="符文查卡完成" if tool=="rift_search_cards" else "符文裁定完成",data=data,warnings=tuple(data.get("warnings",[])))
         if tool == "search_cards":
             return self._search_cards(arguments, request)
         if tool == "translate_text":
@@ -292,6 +313,9 @@ class ProjectAssistantToolRunner:
         )
 
 
+_SPECIALIST_SLOTS=threading.BoundedSemaphore(2)
+
+
 class AssistantAgent:
     def __init__(
         self,
@@ -317,10 +341,15 @@ class AssistantAgent:
         signatures: set[str] = set()
 
         for step in range(1, request.max_steps + 1):
-            action = self._plan(text, observations)
+            from rag_agent.deadline import remaining
+            remaining()
+            contextual_text=json.dumps({"current_request":text,"recent_history":request.history,"quoted_bot_reply":request.quoted_reply},ensure_ascii=False) if request.history or request.quoted_reply else text
+            action = self._plan(contextual_text, observations)
             self._emit("planner", step, f"Agent 选择工具：{action.tool}", action.to_dict())
-            if action.tool == "finish":
+            if action.tool in {"finish", "clarify"}:
                 answer = str(action.arguments["answer"]).strip()
+                if len(observations)==1 and observations[0].ok and observations[0].tool in {"adjudicate","rift_rules"}:
+                    answer=observations[0].data.get("natural_answer") or observations[0].data.get("answer") or answer
                 trace.append(AssistantTraceEntry(step=step, action=action))
                 self._emit("final", step, "Agent 已生成最终回答。", {"answer": answer})
                 return AssistantAgentResponse(
@@ -345,11 +374,13 @@ class AssistantAgent:
             else:
                 signatures.add(signature)
                 try:
-                    observation = self.tool_runner.run(
-                        action.tool,
-                        action.arguments,
-                        request,
-                    )
+                    heavy=action.tool in {"search_cards","adjudicate","rift_rules"}
+                    acquired=_SPECIALIST_SLOTS.acquire(timeout=0.1) if heavy else False
+                    if heavy and not acquired:raise RuntimeError("专业查询暂时繁忙，请稍后再试；聊天仍可使用。")
+                    try:
+                        observation = self.tool_runner.run(action.tool,action.arguments,request)
+                    finally:
+                        if acquired:_SPECIALIST_SLOTS.release()
                 except Exception as exc:
                     observation = AssistantToolObservation(
                         tool=action.tool,
@@ -467,24 +498,24 @@ def build_assistant_planner_prompt(
     ]
     return "\n".join(
         [
-            "你是游戏王项目的上层任务 Agent。你负责选择专业工具，不直接代替工具执行任务。",
+            "你是神人，一个支持日常聊天、游戏王和符文战场的统一助手。根据当前请求和该用户的上下文选择专业工具。",
             "可用工具及参数 schema：",
             json.dumps(ASSISTANT_TOOL_SCHEMAS, ensure_ascii=False, indent=2),
             "",
             "规则：",
-            "1. 卡片名称、效果内容、相似效果或结构化卡片条件使用 search_cards。",
+            "1. 游戏王查卡使用 search_cards，游戏王裁定使用 adjudicate；符文战场查卡使用 rift_search_cards，符文裁定使用 rift_rules。",
             "2. 翻译请求使用 translate_text，并原样保留待翻译文本。",
-            "3. 具体对局情景、能否发动、如何处理、连锁或规则适用问题使用 adjudicate。",
+            "3. 普通闲聊、问候和无需专业资料的解释可直接 finish，不调用工具。不能把日常消息硬套成卡牌问题。",
             "4. 一个请求包含多个任务时可以依次调用多个工具。",
-            "5. 工具已经返回足够结果后调用 finish；不得重复相同调用。",
-            "6. finish.answer 只能依据工具结果，不得补写未检索到的卡片效果或裁定。",
+            "5. 工具返回足够结果后 finish；不得重复相同调用。追问结合历史里已确认卡片，完整展开场景再调用工具。",
+            "6. 卡牌效果与裁定必须依据工具结果，保留来源、覆盖不足与候选；日常聊天可直接回答。游戏或卡名不明且影响答案时 clarify；不要把候选当成已确认卡片。工具失败时不能凭记忆编造裁定。",
             "7. rationale 只写简短的下一步理由，不输出隐藏思维过程。",
             "8. 只返回一个 JSON object，不要输出 Markdown。",
             "",
             "输出格式：",
             json.dumps(
                 {
-                    "tool": "search_cards | translate_text | adjudicate | finish",
+                    "tool": "search_cards | adjudicate | rift_search_cards | rift_rules | translate_text | clarify | finish",
                     "arguments": {},
                     "rationale": "简短理由",
                 },
@@ -502,7 +533,7 @@ def build_assistant_planner_prompt(
 
 
 def _validate_tool_arguments(tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-    if tool == "search_cards":
+    if tool in {"search_cards", "rift_search_cards", "rift_rules"}:
         _reject_extra_arguments(arguments, {"query", "top_k"})
         query = _required_string(arguments, "query")
         top_k = arguments.get("top_k", 5)
@@ -519,7 +550,7 @@ def _validate_tool_arguments(tool: str, arguments: Mapping[str, Any]) -> dict[st
     if tool == "adjudicate":
         _reject_extra_arguments(arguments, {"scenario"})
         return {"scenario": _required_string(arguments, "scenario")}
-    if tool == "finish":
+    if tool in {"finish", "clarify"}:
         _reject_extra_arguments(arguments, {"answer"})
         return {"answer": _required_string(arguments, "answer")}
     raise ValueError(f"未知 Agent 工具：{tool}。")
@@ -552,7 +583,12 @@ def _compact_observation(
     observation: AssistantToolObservation,
 ) -> dict[str, Any]:
     data: dict[str, Any]
-    if observation.tool == "search_cards":
+    if observation.tool in {"rift_search_cards", "rift_rules"}:
+        data={key:observation.data.get(key) for key in ["answer","results","sources","resolved_cards","coverage","exhausted","ambiguous"] if key in observation.data}
+        if "results" in data:
+            data["results"]=[{key:card.get(key) for key in ["card_key","title","name_cn","name_en","sub_title_cn","text_cn","text_cn_filled","cn_fill_note","text_en","errata_cn","editions","energy","rune_power","might","might_bonus","type_cn","color_cn","rarity_cn"]} for card in data["results"][:10]]
+        if "sources" in data:data["sources"]=data["sources"][:20]
+    elif observation.tool == "search_cards":
         results = observation.data.get("results", [])
         data = {
             "results": [
@@ -591,7 +627,10 @@ def _fallback_answer(observations: list[AssistantToolObservation]) -> str:
     for observation in observations:
         if not observation.ok:
             continue
-        if observation.tool == "search_cards":
+        if observation.tool in {"rift_rules", "rift_search_cards"}:
+            value=str(observation.data.get("answer", "")).strip()
+            title="符文结果"
+        elif observation.tool == "search_cards":
             value = str(observation.data.get("answer", "")).strip()
             title = "查卡结果"
         elif observation.tool == "translate_text":

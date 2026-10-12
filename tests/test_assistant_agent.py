@@ -83,6 +83,9 @@ def test_tool_contracts_expose_all_project_capabilities():
         "translate_text",
         "adjudicate",
         "finish",
+        "rift_search_cards",
+        "rift_rules",
+        "clarify",
     }
 
 
@@ -191,7 +194,7 @@ def test_agent_emits_progress_without_exposing_hidden_reasoning():
 def test_planner_prompt_is_chinese_and_includes_strict_tool_guidance():
     prompt = build_assistant_planner_prompt("翻译 hello", [])
 
-    assert "上层任务 Agent" in prompt
+    assert "统一助手" in prompt
     assert "翻译请求使用 translate_text" in prompt
     assert "只返回一个 JSON object" in prompt
 

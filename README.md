@@ -1,4 +1,6 @@
-# Yu-Gi-Oh! Card RAG Agent
+# Unified Chat and Card Game Agent
+
+服务器当前提供普通聊天、游戏王、符文战场和翻译的统一 Agent，支持按群与用户隔离的追问上下文。部署与回滚见 [docs/unified-agent.md](docs/unified-agent.md)。
 
 ## Encoding Policy
 

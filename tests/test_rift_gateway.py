@@ -273,3 +273,19 @@ def test_malformed_success_bodies_raise_upstream_error(raw):
 
     assert excinfo.value.category == CATEGORY_UPSTREAM
     assert "malformed success response" in str(excinfo.value)
+
+
+@pytest.fixture(autouse=True)
+def legacy_http_transport(monkeypatch):
+    # Existing transport contract cases exercise the explicit rollback mode.
+    monkeypatch.setenv("RIFTBOUND_RAG_TRANSPORT","http")
+
+def test_default_transport_calls_library_without_http(monkeypatch):
+    monkeypatch.delenv("RIFTBOUND_RAG_TRANSPORT")
+    seen=[]
+    def query(*args):
+        seen.append(args)
+        return {"answer":"库调用结果","warnings":[],"sources":[]}
+    monkeypatch.setattr("rag_agent.rift_tools.query_rules",query)
+    result=execute_rift_query(_request())
+    assert result["answer"]=="库调用结果" and len(seen)==1

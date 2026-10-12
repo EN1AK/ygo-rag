@@ -1,5 +1,7 @@
 # ygo-rag 设计文档（接口与集成）
 
+> 2026-10-12：当前部署已升级为统一聊天/游戏王/符文 Agent，见 [unified-agent.md](unified-agent.md)。下文原网关拓扑保留为历史设计；生产不再依赖独立 7862 服务。
+
 本文档面向后续开发，说明 ygo-rag 的整体结构、对外接口契约和集成方式。
 使用示例见 [README.md](../README.md)；接口行为级规范以 `openspec/specs/` 为准；进行中的改造见 `openspec/changes/`。
 

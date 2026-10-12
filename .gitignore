@@ -9,3 +9,5 @@ models/
 
 /data/*
 !/data/.gitkeep
+
+data/agent_sessions.db*

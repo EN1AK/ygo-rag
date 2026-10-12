@@ -16,6 +16,8 @@ agent 模式；错误 JSON 一律 {"error": str}。
 """
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -149,6 +151,12 @@ def execute_rift_query(
     transport: Transport | None = None,
 ) -> dict[str, Any]:
     """POST {base}/api/query 并组装透传响应；失败抛 RiftGatewayError。"""
+    if transport is None and os.getenv("RIFTBOUND_RAG_TRANSPORT","library")=="library":
+        from rag_agent.rift_tools import query_rules
+        try:
+            return assemble_rift_gateway_response(query_rules(request.query,request.top_k,request.trace or False,request.mode))
+        except TimeoutError as exc:raise RiftGatewayError(CATEGORY_TIMEOUT,"符文查询超时") from exc
+        except OSError as exc:raise RiftGatewayError(CATEGORY_UNAVAILABLE,"符文知识库不可用") from exc
     settings = settings or Settings.from_env()
     transport = transport or _default_transport
     url = f"{settings.riftbound_rag_base_url.rstrip('/')}/api/query"
