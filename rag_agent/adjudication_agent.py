@@ -6380,7 +6380,7 @@ def build_agent_planner_prompt(state: AdjudicationAgentState) -> str:
     )
     return "\n".join(
         [
-            "你是游戏王 OCG 裁定 agent 的规划器。",
+            "你是游戏王 OCG 裁定 agent 的规划器。表达干练，结论先行，简洁准确，不加入聊天人格、撒娇或角色动作。",
             "你每轮只能选择一个工具。工具结果才是事实；你的 notes/hypotheses 只是工作假设。",
             "不要编造 card_id、evidence_id、别名或裁定事实。",
             "调用 resolve_cards、FAQ/supplement/analogous/rules 证据检索、"
