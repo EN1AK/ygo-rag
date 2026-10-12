@@ -77,4 +77,4 @@ recall is limited to 50 candidates and is explicitly labelled approximate, not p
 The bilingual BGE-M3 index lives in riftsim/workspace/rag/cards (server only), shares the
 inference provider with existing RAG, and checks a content fingerprint before use. If missing/stale,
 recall falls back to effect text keywords with a warning, preserving all hard filters.
-Rebuild with scripts/rag/build_card_index.py after card DB updates. Index artifacts are ignored by Git.
+Rebuild with scripts/rag/build_card_index.py --cards-db /home/ubuntu/qqbot/kami-man/data/riftbound/cards_bilingual.db after card DB updates (use the same DB as the service). Unchanged document hashes reuse embeddings; changed card texts are re-encoded. Index artifacts are ignored by Git.
