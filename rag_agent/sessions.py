@@ -56,7 +56,7 @@ class SessionStore:
         for observation in response.tool_results:
             if observation.ok:
                 data=observation.data
-                facts.append({"ambiguous":bool(data.get("ambiguous") or data.get("coverage",{}).get("ambiguous_mentions")),"tool":observation.tool,"resolved_cards":data.get("resolved_cards",[]),"cards":[{k:card.get(k) for k in ["card_id","card_key","name","name_cn","sub_title_cn"]} for card in data.get("results",[])[:5]],"sources":data.get("sources",[])[:10]})
+                facts.append({"ambiguous":bool(data.get("ambiguous") or data.get("coverage",{}).get("ambiguous_mentions")),"tool":observation.tool,"search_context":{k:data[k] for k in ["search_mode","filters","query","effect_query","sort_by","top_k","offset","next_offset","total"] if k in data},"resolved_cards":data.get("resolved_cards",[]),"cards":[{k:card.get(k) for k in ["card_id","card_key","name","name_cn","sub_title_cn"]} for card in data.get("results",[])[:5]],"sources":data.get("sources",[])[:10]})
         with self.connect() as db:
             db.execute("delete from turns where time<?",(time.time()-self.ttl,))
             db.execute("insert into turns(session,time,user,answer,tools) values(?,?,?,?,?)",(key,time.time(),user[:8000],response.answer[:10000],json.dumps(facts,ensure_ascii=False)))

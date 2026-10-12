@@ -71,7 +71,31 @@ ASSISTANT_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
 ASSISTANT_TOOL_SCHEMAS["search_cards"]["description"]="游戏王查卡、卡片效果相似检索。仅用于游戏王。"
 ASSISTANT_TOOL_SCHEMAS["finish"]={"description":"直接回答日常聊天，或汇总已完成的工具结果。","arguments":{"answer":"必填；日常聊天可直接作答，卡片效果和裁定只能依据工具结果。"}}
 ASSISTANT_TOOL_SCHEMAS.update({
-    "rift_search_cards":{"description":"符文战场查卡：中文名、英文名、副标题、编号和模糊卡名；不支持按效果语义找相似卡。", "arguments":{"query":"必填卡名或编号","top_k":"1-20，默认10"}},
+    "rift_search_cards":{
+        "description":"符文战场卡名/编号/模糊查卡、卡库属性条件筛选、效果描述语义检索。条件检索返回多张结果是正常列表，不代表卡名歧义。",
+        "arguments":{
+            "query":"卡名或编号；条件/效果检索时可留空，或保留原始问题作记录，不用此字段解析条件。",
+            "filters":{
+                "description":"可选对象；字段间 AND，同一列表值 OR（text_contains 为 AND）。省略时按卡名查；空对象表示查询全卡库。不要输出未列出的字段。",
+                "colors":"红/绿/蓝/橙/紫/黄/无色，或 Fury/Calm/Mind/Body/Chaos/Order/Colorless 的列表",
+                "color_mode":"any 默认（包含任意所选颜色），all（包含全部），exact（颜色集合完全一致；纯红=红+exact）",
+                "exclude_colors":"排除颜色列表","color_count":"颜色数量范围（无色为0），如多色 {min:2}",
+                "types":"单位/法术/装备/传奇/战场/符文列表，单位包括英雄、专属和指示物单位",
+                "super_types":"英雄/专属/指示物/基础列表",
+                "energy":"能量费用整数或范围对象 {min,max,gt,lt,eq}",
+                "rune_power":"符文之力费用整数或范围对象 {min,max,gt,lt,eq}",
+                "might":"印刷基础战力整数或范围对象 {min,max,gt,lt,eq}，不含临时增益",
+                "might_bonus":"装备印刷战力加成整数或范围对象 {min,max,gt,lt,eq}",
+                "sets":"系列编号列表，卡库有 OGN/OGS/UNL/SFD/VEN/ARC/FND/SGN",
+                "variants":"base/alt/star/sp/token 列表","rarities":"稀有度中文或英文列表（普通/不凡/稀有/史诗/异画）",
+                "tags":"标签列表，如约德尔人/龙/灵体/武装，按标签精确匹配",
+                "heroes":"关联英雄中文名列表，如阿狸/蔚/提莫","regions":"地区中文或英文列表，如艾欧尼亚/Ionia",
+                "name_contains":"卡名或副标题包含的文字","text_contains":"效果原文必须包含的关键词列表，适合查迅捷/游走等明确关键词；AND 匹配"
+            },
+            "effect_query":"可选，按效果意图语义检索的描述，如保护其他单位；可与 filters 组合。不要把纯属性条件写到这里。语义结果只是候选，阅读卡文确认。",
+            "top_k":"1-20，默认10","offset":"分页起点，默认0；下一页使用上次 next_offset 并保留原条件",
+            "sort_by":"card_key/relevance/might_asc/might_desc/energy_asc/energy_desc/rune_power_asc/rune_power_desc"
+        }},
     "rift_rules":{"description":"符文战场规则、裁定、对局互动；返回可验证依据及未解决卡名。", "arguments":{"query":"必填，保留完整场景与问题","top_k":"1-20，默认6"}},
     "clarify":{"description":"游戏或卡名有歧义时询问用户，不擅自选择。","arguments":{"answer":"必填，简短澄清问题"}}
 })
@@ -215,8 +239,8 @@ class ProjectAssistantToolRunner:
     ) -> AssistantToolObservation:
         if tool in {"rift_search_cards", "rift_rules"}:
             from rag_agent.rift_tools import search_cards,query_rules
-            query=str(arguments["query"])
-            data=search_cards(query,int(arguments.get("top_k",10))) if tool=="rift_search_cards" else query_rules(query,int(arguments.get("top_k",6)),request.include_specialist_trace)
+            query=str(arguments.get("query", ""))
+            data=search_cards(query,int(arguments.get("top_k",10)),filters=arguments.get("filters"),effect_query=str(arguments.get("effect_query", "")),offset=int(arguments.get("offset",0)),sort_by=str(arguments.get("sort_by","card_key"))) if tool=="rift_search_cards" else query_rules(query,int(arguments.get("top_k",6)),request.include_specialist_trace)
             return AssistantToolObservation(tool=tool,ok=True,summary="符文查卡完成" if tool=="rift_search_cards" else "符文裁定完成",data=data,warnings=tuple(data.get("warnings",[])))
         if tool == "search_cards":
             return self._search_cards(arguments, request)
@@ -374,7 +398,7 @@ class AssistantAgent:
             else:
                 signatures.add(signature)
                 try:
-                    heavy=action.tool in {"search_cards","adjudicate","rift_rules"}
+                    heavy=action.tool in {"search_cards","adjudicate","rift_rules"} or (action.tool=="rift_search_cards" and bool(action.arguments.get("effect_query")))
                     acquired=_SPECIALIST_SLOTS.acquire(timeout=0.1) if heavy else False
                     if heavy and not acquired:raise RuntimeError("专业查询暂时繁忙，请稍后再试；聊天仍可使用。")
                     try:
@@ -514,6 +538,8 @@ def build_assistant_planner_prompt(
             "5. 工具返回足够结果后 finish；不得重复相同调用。追问结合历史里已确认卡片，完整展开场景再调用工具。",
             "6. 卡牌效果与裁定必须依据工具结果，保留来源、覆盖不足与候选；日常聊天可直接回答。游戏或卡名不明且影响答案时 clarify；不要把候选当成已确认卡片。工具失败时不能凭记忆编造裁定。",
             "7. rationale 只写简短的下一步理由，不输出隐藏思维过程。",
+            "符文条件查卡必须调用 rift_search_cards 并把条件放入 filters，效果意图放 effect_query；不要用 rift_rules 找满足属性的卡。条件检索中的卡名限制放 name_contains，英雄关联放 heroes；query 只是原问题记录，不参与条件过滤。6战力以上用 might.min=6，超过6用 might.gt=6；红色默认包含多色中的红，纯红用 color_mode=exact；未知属性不能自行忽略，应说明或澄清。",
+            "条件查询返回多张卡是正常结果，只在工具 ambiguous=true 时请求确认卡名。保留总数、分页和卡号；语义候选不能宣称全部严格满足效果要求，先核对原文，errata_cn 存在时优先采用勘误卡文。翻页保留历史的 filters/effect_query/sort_by/top_k，将 offset 改为 next_offset；追加条件保留旧条件并合并修改。每次默认取一页，不自动连续取完所有页。",
             "8. 只返回一个 JSON object，不要输出 Markdown。",
             "",
             "输出格式：",
@@ -537,7 +563,27 @@ def build_assistant_planner_prompt(
 
 
 def _validate_tool_arguments(tool: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
-    if tool in {"search_cards", "rift_search_cards", "rift_rules"}:
+    if tool == "rift_search_cards":
+        _reject_extra_arguments(arguments,{"query","top_k","filters","effect_query","offset","sort_by"})
+        query=arguments.get("query", "")
+        effect_query=arguments.get("effect_query", "")
+        if any(not isinstance(x,str) or len(x)>500 for x in (query,effect_query)):
+            raise ValueError("query/effect_query 必须为最多500字符的字符串")
+        filters=arguments.get("filters")
+        if filters is not None:
+            if not isinstance(filters,dict):raise ValueError("filters 必须为对象")
+            allowed={"colors","color_mode","exclude_colors","color_count","types","super_types","energy","rune_power","might","might_bonus","sets","variants","rarities","tags","heroes","regions","name_contains","text_contains"}
+            _reject_extra_arguments(filters,allowed)
+        if not query.strip() and not effect_query.strip() and filters is None:raise ValueError("需要卡名、属性条件或效果描述")
+        top_k=arguments.get("top_k",10);offset=arguments.get("offset",0)
+        if isinstance(top_k,bool) or not isinstance(top_k,int) or not 1<=top_k<=20:raise ValueError("top_k 必须为1-20整数")
+        if isinstance(offset,bool) or not isinstance(offset,int) or not 0<=offset<=10000:raise ValueError("offset 必须为0-10000整数")
+        sort_by=arguments.get("sort_by","card_key")
+        if sort_by not in {"card_key","relevance","might_asc","might_desc","energy_asc","energy_desc","rune_power_asc","rune_power_desc"}:raise ValueError("不支持的卡片排序")
+        result={"query":query.strip(),"top_k":top_k,"effect_query":effect_query.strip(),"offset":offset,"sort_by":sort_by}
+        if filters is not None:result["filters"]=filters
+        return result
+    if tool in {"search_cards", "rift_rules"}:
         _reject_extra_arguments(arguments, {"query", "top_k"})
         query = _required_string(arguments, "query")
         top_k = arguments.get("top_k", 5)
@@ -588,9 +634,9 @@ def _compact_observation(
 ) -> dict[str, Any]:
     data: dict[str, Any]
     if observation.tool in {"rift_search_cards", "rift_rules"}:
-        data={key:observation.data.get(key) for key in ["answer","results","sources","resolved_cards","coverage","exhausted","ambiguous"] if key in observation.data}
+        data={key:observation.data.get(key) for key in ["answer","results","sources","resolved_cards","coverage","exhausted","ambiguous","total","total_is_exact","filtered_total","offset","next_offset","search_mode","filters","query","effect_query","sort_by","top_k"] if key in observation.data}
         if "results" in data:
-            data["results"]=[{key:card.get(key) for key in ["card_key","title","name_cn","name_en","sub_title_cn","text_cn","text_cn_filled","cn_fill_note","text_en","errata_cn","editions","energy","rune_power","might","might_bonus","type_cn","color_cn","rarity_cn"]} for card in data["results"][:10]]
+            data["results"]=[{key:card.get(key) for key in ["card_key","title","name_cn","name_en","sub_title_cn","text_cn","text_cn_filled","cn_fill_note","text_en","errata_cn","editions","energy","rune_power","might","might_bonus","type_cn","color_cn","rarity_cn"]} for card in data["results"][:20]]
         if "sources" in data:data["sources"]=data["sources"][:20]
     elif observation.tool == "search_cards":
         results = observation.data.get("results", [])

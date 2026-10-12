@@ -57,3 +57,24 @@ If rolling back, restore the previous tracked source in each repo, remove only
 and restart `ygo-rag.service` and `kami-man.service`. Keep the repaired card DB,
 image cache, original `.env` files and existing systemd drop-ins intact. The
 riftsim script entry points remain compatibility wrappers for the package.
+
+
+## Riftbound card catalogue retrieval
+
+`rift_search_cards` supports name/code lookup, structured `filters`, and optional `effect_query`.
+Fields are derived from the bilingual cards DB: colors/exclude_colors/color_mode/color_count,
+types/super_types, energy/rune_power/might/might_bonus, sets/variants/rarities,
+tags/heroes/regions, name_contains and text_contains. Numeric ranges accept min/max (inclusive),
+gt/lt (exclusive), or eq. Unknown values never satisfy numeric conditions.
+Unit filters include Champion/Signature/Token unit subtypes; colors default to any membership,
+so red includes multicolor red cards, while color_mode=exact selects pure red.
+Different fields are AND; list entries are OR except text_contains (AND).
+Edition filtering precedes grouping. Card effects prefer Chinese errata when available.
+`offset`/`top_k`/`next_offset` support pages; `sort_by` supports cost/power order.
+History preserves search context to carry filters into follow-up pages and refinements.
+Multiple catalogue matches are not ambiguous card names. Structured total is exact; semantic
+recall is limited to 50 candidates and is explicitly labelled approximate, not proof of effect equivalence.
+The bilingual BGE-M3 index lives in riftsim/workspace/rag/cards (server only), shares the
+inference provider with existing RAG, and checks a content fingerprint before use. If missing/stale,
+recall falls back to effect text keywords with a warning, preserving all hard filters.
+Rebuild with scripts/rag/build_card_index.py after card DB updates. Index artifacts are ignored by Git.

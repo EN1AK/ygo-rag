@@ -292,3 +292,19 @@ def test_project_tool_runner_adapts_existing_services(monkeypatch, tmp_path):
     assert seen["adjudication"].use_llm is True
     assert seen["adjudication"].include_trace is True
     assert adjudication.data["natural_answer"] == "裁定原文"
+
+
+def test_rift_catalogue_action_supports_filters_and_pages():
+    from rag_agent.assistant_agent import parse_assistant_planner_action,build_assistant_planner_prompt
+    import json
+    action=parse_assistant_planner_action(json.dumps({"tool":"rift_search_cards","arguments":{"filters":{"colors":["红色"],"might":{"min":6},"types":["单位"]},"offset":10,"top_k":10}}))
+    assert action.arguments["filters"]["might"]["min"]==6
+    assert action.arguments["offset"]==10
+    assert "纯红" in build_assistant_planner_prompt("问题",[])
+
+
+def test_rift_catalogue_rejects_unknown_fields():
+    from rag_agent.assistant_agent import parse_assistant_planner_action
+    import json,pytest
+    with pytest.raises(ValueError):
+        parse_assistant_planner_action(json.dumps({"tool":"rift_search_cards","arguments":{"filters":{"attack":6}}}))

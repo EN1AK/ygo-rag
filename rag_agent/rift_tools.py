@@ -14,14 +14,15 @@ def runtime():
         return _runtime
 def query_rules(query,top_k=6,trace=False,mode=None):
     return runtime().query(query,top_k,trace,mode or "agent")
-def search_cards(query,top_k=10):
-    from rift_rag.cards import search_riftbound_cards,card_title
-    cards=search_riftbound_cards(query,top_k)
+def search_cards(query="",top_k=10,*,filters=None,effect_query="",offset=0,sort_by="card_key"):
+    from rift_rag.card_search import search_catalog
+    from rift_rag.cards import card_title
+    remaining()
+    data=search_catalog(query,top_k,filters=filters,effect_query=effect_query,offset=offset,sort_by=sort_by,embedding_provider=get_embeddings)
     results=[]
-    for card in cards:
+    for card in data["results"]:
         item={k:v for k,v in card.items() if k not in {"editions","image_path"}}
         item["title"]=card_title(card)
         item["editions"]=[c["card_key"] for c in card["editions"]]
         results.append(item)
-    ambiguous=len(cards)>1 or bool(cards and cards[0]["match_kind"]=="fuzzy")
-    return {"results":results,"ambiguous":ambiguous,"answer":"请从候选卡片中确认具体卡号。" if ambiguous else "查卡完成。" if cards else "未找到卡片。"}
+    return dict(data,results=results)
