@@ -62,7 +62,7 @@ riftsim script entry points remain compatibility wrappers for the package.
 ## Riftbound card catalogue retrieval
 
 `rift_search_cards` supports name/code lookup, structured `filters`, and optional `effect_query`.
-Fields are derived from the bilingual cards DB: colors/exclude_colors/color_mode/color_count,
+Fields are derived from the bilingual cards DB: card_keys (exact edition codes), colors/exclude_colors/color_mode/color_count,
 types/super_types, energy/rune_power/might/might_bonus, sets/variants/rarities,
 tags/heroes/regions, name_contains and text_contains. Numeric ranges accept min/max (inclusive),
 gt/lt (exclusive), or eq. Unknown values never satisfy numeric conditions.

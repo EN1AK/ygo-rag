@@ -77,6 +77,7 @@ ASSISTANT_TOOL_SCHEMAS.update({
             "query":"卡名或编号；条件/效果检索时可留空，或保留原始问题作记录，不用此字段解析条件。",
             "filters":{
                 "description":"可选对象；字段间 AND，同一列表值 OR（text_contains 为 AND）。省略时按卡名查；空对象表示查询全卡库。不要输出未列出的字段。",
+                "card_keys":"完整卡号列表（含异画等版本后缀），如 OGN-066a；可与其他条件组合，不能省略后缀",
                 "colors":"红/绿/蓝/橙/紫/黄/无色，或 Fury/Calm/Mind/Body/Chaos/Order/Colorless 的列表",
                 "color_mode":"any 默认（包含任意所选颜色），all（包含全部），exact（颜色集合完全一致；纯红=红+exact）",
                 "exclude_colors":"排除颜色列表","color_count":"颜色数量范围（无色为0），如多色 {min:2}",
@@ -538,7 +539,7 @@ def build_assistant_planner_prompt(
             "5. 工具返回足够结果后 finish；不得重复相同调用。追问结合历史里已确认卡片，完整展开场景再调用工具。",
             "6. 卡牌效果与裁定必须依据工具结果，保留来源、覆盖不足与候选；日常聊天可直接回答。游戏或卡名不明且影响答案时 clarify；不要把候选当成已确认卡片。工具失败时不能凭记忆编造裁定。",
             "7. rationale 只写简短的下一步理由，不输出隐藏思维过程。",
-            "符文条件查卡必须调用 rift_search_cards 并把条件放入 filters，效果意图放 effect_query；不要用 rift_rules 找满足属性的卡。条件检索中的卡名限制放 name_contains，英雄关联放 heroes；query 只是原问题记录，不参与条件过滤。6战力以上用 might.min=6，超过6用 might.gt=6；红色默认包含多色中的红，纯红用 color_mode=exact；未知属性不能自行忽略，应说明或澄清。",
+            "符文条件查卡必须调用 rift_search_cards 并把条件放入 filters，效果意图放 effect_query；不要用 rift_rules 找满足属性的卡。明确指定卡号时必须保留完整编号（包括 a 等版本后缀），只按编号查时 query 就填该编号，不要改成卡名+系列；多卡号或与其他条件组合时用 filters.card_keys。条件检索中的卡名限制放 name_contains，英雄关联放 heroes；query 只是原问题记录，不参与条件过滤。6战力以上用 might.min=6，超过6用 might.gt=6；红色默认包含多色中的红，纯红用 color_mode=exact；未知属性不能自行忽略，应说明或澄清。",
             "条件查询返回多张卡是正常结果，只在工具 ambiguous=true 时请求确认卡名。保留总数、分页和卡号；语义候选不能宣称全部严格满足效果要求，先核对原文，errata_cn 存在时优先采用勘误卡文。翻页保留历史的 filters/effect_query/sort_by/top_k，将 offset 改为 next_offset；追加条件保留旧条件并合并修改。每次默认取一页，不自动连续取完所有页。",
             "8. 只返回一个 JSON object，不要输出 Markdown。",
             "",
@@ -572,7 +573,7 @@ def _validate_tool_arguments(tool: str, arguments: Mapping[str, Any]) -> dict[st
         filters=arguments.get("filters")
         if filters is not None:
             if not isinstance(filters,dict):raise ValueError("filters 必须为对象")
-            allowed={"colors","color_mode","exclude_colors","color_count","types","super_types","energy","rune_power","might","might_bonus","sets","variants","rarities","tags","heroes","regions","name_contains","text_contains"}
+            allowed={"card_keys","colors","color_mode","exclude_colors","color_count","types","super_types","energy","rune_power","might","might_bonus","sets","variants","rarities","tags","heroes","regions","name_contains","text_contains"}
             _reject_extra_arguments(filters,allowed)
         if not query.strip() and not effect_query.strip() and filters is None:raise ValueError("需要卡名、属性条件或效果描述")
         top_k=arguments.get("top_k",10);offset=arguments.get("offset",0)
