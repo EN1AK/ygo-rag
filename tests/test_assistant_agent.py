@@ -86,6 +86,10 @@ def test_tool_contracts_expose_all_project_capabilities():
         "rift_search_cards",
         "rift_rules",
         "clarify",
+        "web_search",
+        "read_webpage",
+        "current_time",
+        "calculate",
     }
 
 
