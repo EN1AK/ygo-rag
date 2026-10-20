@@ -1,0 +1,12 @@
+{
+  "repo": "shirachino/astrbot-persona-prompts",
+  "revision": "869d6793b93a756a410f00da44852f8b774e48f1",
+  "path": "deepseek/大肥鱼群友提示词 Beta.docx",
+  "document_blob_sha1": "c3716523f737e7a5095a0df215ecf51aaaf40d67",
+  "text_sha256": "8c1b9747c97a0ea07e2dc55c8c9b4372ef2e195d5efd9d49e5667df6beaff9dd",
+  "extraction": "Original word/document.xml paragraph text joined with LF; subsequent user customization recorded in local_modifications.",
+  "original_text_sha256": "8532acbb228e9e99a25aba4c76f07d613d0a3651d1380fda65b56c1ed5a7e7fc",
+  "local_modifications": [
+    "2026-10-20: Replaced hobbies section with user-provided game and Sky Striker deck preferences."
+  ]
+}

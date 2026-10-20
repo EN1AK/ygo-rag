@@ -11,3 +11,6 @@ models/
 !/data/.gitkeep
 
 data/agent_sessions.db*
+
+# Local persona edit backups
+personas/**/persona.txt.bak*

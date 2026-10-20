@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from rag_agent.config import Settings
+from rag_agent.group_chat import parse_group_chat_request, execute_group_chat
+from rag_agent.group_style import parse_style_request, execute_style_summary
+from rag_agent.group_learning import parse_learning_request, execute_learning
+from rag_agent.group_budget import GroupBudget, GroupBudgetExceeded
+from rag_agent.mention_chat import parse_route_request,execute_route,parse_mention_request,execute_mention,session_base,clear_mention
+from rag_agent.card_translation import (
+    UnreadableCardError, execute_card_translation, parse_card_translation_request,
+)
 from rag_agent.adjudication_service import (
     AdjudicationRequest,
     AdjudicationResponse,
@@ -60,6 +68,13 @@ def create_app(
     adjudication_handler: AdjudicationHandler | None = None,
     assistant_handler: AssistantHandler | None = None,
     rift_handler: RiftHandler | None = None,
+    card_translation_handler=None,
+    group_chat_handler=None,
+    group_style_handler=None,
+    group_learning_handler=None,
+    mention_route_handler=None,
+    mention_chat_handler=None,
+    mention_clear_handler=None,
 ):
     from rag_agent.http_runtime import HttpRuntime
     runtime = HttpRuntime()
@@ -83,6 +98,28 @@ def create_app(
             if method == "GET" and path == "/healthz":
                 await _send_response(send,200,{"ok":True,"service":"unified-agent","domains":["ygo","riftbound"],"sessions":True})
                 return
+            if method == "GET" and path == "/api/group-chat/status":
+                await _send_response(send,200,await runtime.call(lambda _:GroupBudget().status(),None))
+                return
+            if method == "POST" and path in {"/api/mention-route","/api/mention-chat","/api/mention-clear"}:
+                payload = await _read_json_body(receive)
+                if path=="/api/mention-route":
+                    request = parse_route_request(payload)
+                    response = await runtime.call(mention_route_handler or _default_mention_route,request)
+                elif path=="/api/mention-chat":
+                    request = parse_mention_request(payload)
+                    response = await runtime.call(mention_chat_handler or _default_mention_chat,request)
+                else:
+                    key = session_base(payload)
+                    response = await runtime.call(mention_clear_handler or clear_mention,key)
+                await _send_response(send,200,response)
+                return
+            if method == "POST" and path == "/api/group-learning":
+                payload = await _read_json_body(receive)
+                request = parse_learning_request(payload)
+                response = await runtime.call(group_learning_handler or _default_group_learning_handler,request)
+                await _send_response(send,200,response)
+                return
             if method == "GET" and path == "/":
                 await _send_html(send, render_index_html())
                 return
@@ -103,6 +140,31 @@ def create_app(
                         ),
                     ),
                 )
+                return
+            if method == "POST" and path == "/api/group-style":
+                payload = await _read_json_body(receive)
+                request = parse_style_request(payload)
+                handler_style = group_style_handler or _default_group_style_handler
+                response = await runtime.call(handler_style, request)
+                await _send_response(send, 200, response)
+                return
+            if method == "POST" and path == "/api/group-chat":
+                payload = await _read_json_body(receive)
+                request = parse_group_chat_request(payload)
+                handler_group = group_chat_handler or _default_group_chat_handler
+                response = await runtime.call(handler_group, request)
+                await _send_response(send, 200, response)
+                return
+            if method == "POST" and path == "/api/card-translate":
+                payload = await _read_json_body(receive)
+                request = parse_card_translation_request(payload)
+                translate_card = card_translation_handler or _default_card_translation_handler
+                try:
+                    response = await runtime.call(translate_card, request)
+                except UnreadableCardError:
+                    await _send_response(send, 422, {"error": "Card name or effect could not be read completely."})
+                    return
+                await _send_response(send, 200, translation_response_to_dict(response))
                 return
             if method == "POST" and path == "/api/translate":
                 payload = await _read_json_body(receive)
@@ -144,6 +206,8 @@ def create_app(
                 await _send_response(send, 200, response)
                 return
             await _send_response(send, 404, {"error": "Not found."})
+        except GroupBudgetExceeded:
+            await _send_response(send,429,{"error":"Group model budget exhausted"})
         except (TimeoutError, asyncio.TimeoutError) as exc:
             await _send_response(send, 504, {"error": "请求超时或服务繁忙，请稍后再试。"})
         except ValueError as exc:
@@ -152,6 +216,30 @@ def create_app(
             await _send_response(send, 500, {"error": str(exc)})
 
     return app
+
+
+def _default_group_learning_handler(request):
+    return execute_learning(request,Settings.from_env())
+
+
+def _default_mention_route(request):
+    return execute_route(request,Settings.from_env())
+
+
+def _default_mention_chat(request):
+    return execute_mention(request,Settings.from_env())
+
+
+def _default_group_style_handler(request):
+    return execute_style_summary(request, Settings.from_env())
+
+
+def _default_group_chat_handler(request):
+    return execute_group_chat(request, Settings.from_env())
+
+
+def _default_card_translation_handler(request):
+    return execute_card_translation(request, Settings.from_env())
 
 
 async def _handle_lifespan(receive, send) -> None:
