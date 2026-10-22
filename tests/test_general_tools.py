@@ -46,7 +46,7 @@ def test_search_uses_only_required_query_and_official_endpoint(monkeypatch):
     result=tools.run_general_tool("web_search",{"query":"public test","count":2},settings())
     assert result["results"][0]["summary"]=="Published facts"
     assert calls[0][0]=="https://api.deepseek.com/v1/tools/search"
-    assert calls[0][1]["json"]=={"query":"public test","count":2,"need_content":False}
+    assert calls[0][1]["json"]=={"query":"public test","count":2,"need_content":True}
     assert calls[0][1]["allow_redirects"] is False
     tools.run_general_tool("web_search",{"query":"public test","count":2},settings())
     assert len(calls)==1

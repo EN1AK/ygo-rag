@@ -180,14 +180,21 @@ def run_general_tool(tool, arguments, settings):
                 "answer": now.strftime("%Y-%m-%d %H:%M:%S") + " 星期" + "一二三四五六日"[now.weekday()] + "（" + args["timezone"] + "）"}
     retrieved = datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds")
     if tool == "web_search":
-        raw = _api(settings, "search", {"query": args["query"], "count": args["count"], "need_content": False})
+        raw = _api(settings, "search", {"query": args["query"], "count": args["count"], "need_content": True})
         if not isinstance(raw.get("results"), list): raise ValueError("搜索返回格式错误")
         results = []
+        content_budget = 12000
         for item in raw["results"][:args["count"]]:
             if not isinstance(item, dict): continue
             try: url = public_url(item.get("url"))
             except ValueError: continue
-            results.append({"title": str(item.get("title") or url)[:200], "url": url,
+            original_content = item.get("content")
+            original_content = original_content.strip() if isinstance(original_content, str) else ""
+            content = original_content[:min(4000, content_budget)]
+            content_budget -= len(content)
+            results.append({"content": content, "content_source": "search_index" if content else None,
+                            "content_truncated": len(original_content) > len(content),
+                            "title": str(item.get("title") or url)[:200], "url": url,
                             "summary": str(item.get("summary") or item.get("snippet") or "")[:1200],
                             "published_at": str(item.get("date") or "")[:80]})
         return {"query": args["query"], "results": results, "sources": [{"title": r["title"], "url": r["url"]} for r in results],
