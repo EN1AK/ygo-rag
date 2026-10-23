@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import asyncio
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -213,7 +214,17 @@ def create_app(
         except ValueError as exc:
             await _send_response(send, 400, {"error": str(exc)})
         except Exception as exc:
-            await _send_response(send, 500, {"error": str(exc)})
+            if path == "/api/mention-chat":
+                known = {"No safe persona reply": "chat_reply_rejected",
+                         "Invalid persona reply": "chat_reply_format",
+                         "Invalid mention chat response": "chat_reply_format",
+                         "Invalid persona source references": "chat_reply_format",
+                         "Unsupported persona tool": "chat_reply_format"}
+                code = known.get(str(exc), "chat_internal_error")
+                logging.getLogger(__name__).warning("Mention request failed code=%s type=%s", code, type(exc).__name__)
+                await _send_response(send, 500, {"error": "Chat request failed", "error_code": code})
+            else:
+                await _send_response(send, 500, {"error": str(exc)})
 
     return app
 

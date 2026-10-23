@@ -1,6 +1,7 @@
 """Bounded read-only tools for persona turns, independent of professional agents."""
 from contextlib import contextmanager
 import json
+import logging
 import time
 
 from rag_agent.deadline import budget_end, remaining
@@ -103,6 +104,15 @@ def run_persona_turn(invoke, settings, messages):
     web_calls = 0
     read_ok = False
     asked_read = False
+    repaired_format = False
+    categories = set()
+    for message in messages:
+        if message.get("role") != "user": continue
+        try: initial = json.loads(message["content"])
+        except (ValueError, TypeError): continue
+        if isinstance(initial, dict):
+            categories.update(item["category"] for item in initial.get("available_meme_categories", [])
+                if isinstance(item, dict) and isinstance(item.get("category"), str))
     for step in range(MAX_TOOLS + 2):
         try:
             remaining()
@@ -113,9 +123,21 @@ def run_persona_turn(invoke, settings, messages):
             return fallback(sources), sources[:6], used
         try:
             data = json.loads(getattr(result, "content", result))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("Invalid mention chat response") from exc
-        if not isinstance(data, dict):
+        except (TypeError, ValueError):
+            data = None
+        final = isinstance(data, dict) and (not data.get("tool") or data.get("tool") == "finish")
+        valid_category = final and isinstance(data.get("meme_category"), str) and data["meme_category"] in categories
+        invalid = not isinstance(data, dict) or (final and (
+            not isinstance(data.get("reply"), str)
+            or (not data["reply"].strip() and not valid_category)))
+        if invalid:
+            logging.getLogger(__name__).warning("Persona response validation failed; repair=%s", not repaired_format)
+            if not repaired_format and remaining() > 8:
+                repaired_format = True
+                messages.append({"role": "user", "content": json.dumps({"response_format_correction":
+                    "上次没有给出有效回复。请只输出JSON对象，reply为非空自然回复（最多2000字符）；"
+                    "如果只发表情，分类必须来自available_meme_categories。不要输出分析或Markdown代码块。"}, ensure_ascii=False)})
+                continue
             raise RuntimeError("Invalid mention chat response")
         tool = data.get("tool")
         if not tool or tool == "finish":
