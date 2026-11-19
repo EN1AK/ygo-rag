@@ -19,9 +19,9 @@ from rag_agent.config import Settings
 from rag_agent.db import load_cards
 from rag_agent.llm import create_deepseek_chat_model
 from rag_agent.retrieval.embeddings import (
-    BgeM3Embeddings,
     SubprocessBgeM3Embeddings,
 )
+from rag_agent.ruling_evidence_service import answer_with_evidence_loop, resolve_evidence_card
 from rag_agent.ruling_index import (
     PersistentRulingRetriever,
     RulingVectorStore,
@@ -50,38 +50,27 @@ def execute_adjudication(
     settings: Settings,
 ) -> AdjudicationResponse:
     cards = load_cards(request.db_path)
-    ruling_card_ids = _ruling_card_ids_for_request(request, cards, settings)
+    ruling_card_ids = _ruling_card_ids_for_request(replace(request, use_agent=True), cards, settings)
     ruling_index = build_ruling_index(request, settings, ruling_card_ids)
     rule_index = build_rule_index(request, settings)
-    llm = create_deepseek_chat_model(settings) if request.use_llm else None
-    persistent_retrievers = (
-        build_persistent_ruling_retrievers(request, settings, cards, llm=llm)
-        if request.use_agent
-        else ()
-    )
-    if request.use_agent:
-        from rag_agent.adjudication_agent import AdjudicationAgent
-
-        response = AdjudicationAgent(
-            cards,
-            settings=settings,
-            ruling_index=ruling_index,
-            rule_index=rule_index,
-            ruling_retrievers=persistent_retrievers,
-            llm=llm,
-            progress_callback=request.progress_callback,
-        ).run(request.scenario)
-        if not (request.include_trace or settings.adjudication_trace_default):
-            response = replace(response, agent_trace=())
+    if request.simulate:
+        return RulingAdjudicator(
+            cards, ruling_index=ruling_index, rule_index=rule_index,
+            llm=create_deepseek_chat_model(settings) if request.use_llm else None,
+        ).adjudicate(request.scenario, simulate=True)
+    adjudicator = RulingAdjudicator(cards, ruling_index=ruling_index, rule_index=rule_index)
+    response = adjudicator.adjudicate(request.scenario, simulate=False)
+    if not request.use_llm:
         return response
-
-    adjudicator = RulingAdjudicator(
-        cards,
-        ruling_index=ruling_index,
+    return answer_with_evidence_loop(
+        response,
+        create_deepseek_chat_model(settings),
         rule_index=rule_index,
-        llm=llm,
+        retrievers=build_persistent_ruling_retrievers(request, settings, cards),
+        resolve=lambda name: resolve_evidence_card(name, cards),
+        include_trace=request.include_trace or settings.adjudication_trace_default,
+        progress_callback=request.progress_callback,
     )
-    return adjudicator.adjudicate(request.scenario, simulate=request.simulate)
 
 
 def _ruling_card_ids_for_request(

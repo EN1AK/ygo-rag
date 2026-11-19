@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib.parse import unquote, urldefrag
 from xml.etree import ElementTree
 
-from rag_agent.card_metadata import decode_effect_category_labels
+from rag_agent.card_metadata import decode_card_structure, decode_effect_category_labels
 from rag_agent.cards import Card, normalize_effect_text
 from rag_agent.retrieval.sparse import tokenize_text
 
@@ -2154,15 +2154,34 @@ def build_card_effect_evidence(resolved_cards: Sequence[ResolvedCard]) -> list[E
         card = resolved.matches[0]
         effect_category_names = tuple(decode_effect_category_labels(card.category))
         text_parts = [f"卡名：{card.name}"]
+        structure = decode_card_structure(
+            type_value=card.type, attribute_value=card.attribute, race_value=card.race,
+            level_value=card.level, atk_value=card.atk, defense_value=card.defense,
+        )
         stats: list[str] = []
-        if card.atk is not None:
-            stats.append(f"ATK {card.atk}")
-        if card.defense is not None:
-            stats.append(f"DEF {card.defense}")
-        if card.level is not None:
-            stats.append(f"等级/阶级/连接 {card.level}")
+        # CDB encodes unknown attack as -2, Link markers in DEF and Pendulum
+        # scales in the high level bits. These are not readable card statistics.
+        if structure.card_kind == "monster" or card.type is None:
+            attack = structure.attack if card.type is not None else card.atk
+            defense = structure.defense if card.type is not None else card.defense
+            if card.atk is not None:
+                stats.append(f"ATK {'?' if card.atk == -2 else attack}")
+            if "link" not in structure.monster_types and card.defense is not None:
+                stats.append(f"DEF {'?' if card.defense == -2 else defense}")
+            if structure.link_rating is not None:
+                stats.append(f"连接 {structure.link_rating}")
+            elif structure.rank is not None:
+                stats.append(f"阶级 {structure.rank}")
+            elif structure.level is not None:
+                stats.append(f"等级 {structure.level}")
+            elif card.type is None and card.level is not None and card.level > 0:
+                stats.append(f"等级/阶级/连接 {card.level & 0xFF}")
         if stats:
             text_parts.append("卡片数值：" + " / ".join(stats))
+        if structure.attribute:
+            text_parts.append(f"属性：{structure.attribute}")
+        if structure.race:
+            text_parts.append(f"种族：{structure.race}")
         if effect_category_names:
             text_parts.append("效果标签：" + "、".join(effect_category_names))
         text_parts.append("效果文本：")
@@ -2184,7 +2203,15 @@ def build_card_effect_evidence(resolved_cards: Sequence[ResolvedCard]) -> list[E
                     "type": card.type,
                     "race": card.race,
                     "attribute": card.attribute,
+                    "attribute_name": structure.attribute,
+                    "race_name": structure.race,
                     "effect_category_names": list(effect_category_names),
+                    "card_kind": structure.card_kind,
+                    "decoded_atk": structure.attack,
+                    "decoded_def": structure.defense,
+                    "decoded_level": structure.level,
+                    "rank": structure.rank,
+                    "link_rating": structure.link_rating,
                 },
             )
         )
